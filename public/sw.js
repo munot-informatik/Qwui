@@ -1,4 +1,9 @@
-const CACHE_NAME = "quittungs-tool-v1";
+// Bei jeder Änderung an der App-Hülle hochzählen (index.html, Schriften,
+// Icons). Der activate-Handler löscht alle Caches mit abweichendem Namen —
+// dadurch bekommen wiederkehrende Nutzer nach einem Deploy sofort die neue
+// index.html, statt beim ersten Aufruf noch die alte aus dem Cache zu sehen.
+// v2: lokale Schriften unter /fonts statt Google Fonts.
+const CACHE_NAME = "quittungs-tool-v2";
 const ASSETS_TO_CACHE = ["./", "./index.html", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -40,7 +45,15 @@ self.addEventListener("fetch", (event) => {
           }
           return response;
         })
-        .catch(() => cached);
+        .catch((err) => {
+          // Nur auf den Cache zurückfallen, wenn dort auch wirklich etwas
+          // liegt. Vorher wurde hier "cached" (also undefined) zurückgegeben,
+          // sobald die Datei noch nie geladen worden war — respondWith(undefined)
+          // lässt den Request mit einem generischen Netzwerkfehler scheitern
+          // statt mit der normalen Offline-Meldung des Browsers.
+          if (cached) return cached;
+          throw err;
+        });
       return cached || networkFetch;
     })
   );

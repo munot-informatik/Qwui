@@ -1,0 +1,41 @@
+# Sicherheits-Header für Cloudflare Pages.
+#
+# Gilt für die statisch ausgelieferten Dateien (HTML, JS, CSS, Icons) — also
+# für die eigentliche App. Antworten, die von einer Pages Function erzeugt
+# werden (/api/*, die 401-Seite aus functions/_middleware.js), setzen ihre
+# Header selbst; _headers greift dort nicht.
+#
+# HSTS steht bewusst NICHT hier, sondern gehört in die Cloudflare-Zone-
+# Einstellung (Edge Certificates -> HTTP Strict Transport Security).
+#
+# ACHTUNG bei künftigen Änderungen: diese Regeln gelten auch für /sw.js, und
+# ein fetch() INNERHALB des Service Workers richtet sich nach dessen eigener
+# CSP. Steht dort connect-src 'self', kann der Service Worker keine fremden
+# Hosts mehr laden — und da er jeden GET-Request abfängt, schlägt dann JEDE
+# Anfrage an einen Drittanbieter fehl, selbst wenn style-src/font-src sie
+# ausdrücklich erlauben. Genau daran sind die extern geladenen Google-Schriften
+# gescheitert; sie liegen deshalb jetzt lokal unter /fonts (siehe index.html).
+# Alles, was die App braucht, muss also von der eigenen Domain kommen.
+
+# Der Service Worker und die Einstiegsseite dürfen nicht aus dem HTTP-Cache des
+# Browsers kommen: sonst behält ein wiederkehrender Nutzer nach einem Deploy den
+# ALTEN Service Worker (und damit die alte App-Hülle samt alter JS-Bundles) und
+# bekommt die neue Version unter Umständen tagelang nicht zu sehen. Genau das
+# ist beim Testen passiert. Die gehashten Dateien unter /assets dürfen und
+# sollen dagegen lange gecacht werden — ihr Name ändert sich bei jeder Änderung.
+/sw.js
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/
+  Cache-Control: no-cache
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'

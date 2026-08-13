@@ -6,28 +6,75 @@
 // Die Basic-Auth-Anmeldedaten (Passwort) werden vom Browser automatisch bei jedem
 // Request an dieselbe Domain mitgeschickt, sobald man einmal eingeloggt ist — die
 // API-Endpunkte sind durch dieselbe functions/_middleware.js geschützt wie die Seite.
+//
+// Zusätzlich werden hier die Firmenlogos aus der Quittungsliste aus- und wieder
+// eingepackt (siehe webLogoStore.js) — dasselbe, was desktop/excelStore.js für
+// die Desktop-Version tut. Jede Speicherschicht kümmert sich um ihre eigene
+// Auslagerung, App.jsx bleibt davon unberührt.
+
+import { externalizeLogos, restoreLogos } from "./webLogoStore.js";
+
+// Schlüssel, dessen Wert eine Liste von Quittungen ist (siehe KEYS in App.jsx).
+const RECEIPTS_KEY = "receipts-list";
+
+async function readRaw(key) {
+  const data = await rawGet(key, false);
+  return data ? data.value : null;
+}
+
+async function rawGet(key, shared) {
+  const params = new URLSearchParams({ key, shared: String(shared) });
+  const res = await fetch(`/api/storage?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(`storage.get fehlgeschlagen: ${res.status}`);
+  }
+  return res.json(); // null oder {key, value, shared}
+}
+
+async function rawSet(key, value, shared) {
+  const res = await fetch(`/api/storage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, value, shared }),
+  });
+  if (!res.ok) {
+    throw new Error(`storage.set fehlgeschlagen: ${res.status}`);
+  }
+  return res.json();
+}
 
 export const storageShim = {
   async get(key, shared = false) {
-    const params = new URLSearchParams({ key, shared: String(shared) });
-    const res = await fetch(`/api/storage?${params.toString()}`);
-    if (!res.ok) {
-      throw new Error(`storage.get fehlgeschlagen: ${res.status}`);
+    const data = await rawGet(key, shared);
+    if (key !== RECEIPTS_KEY || !data || !data.value) return data;
+
+    // Ausgelagerte Logos wieder einsetzen, damit App.jsx und die PDF-Erzeugung
+    // dieselbe Quittungsform sehen wie vor der Auslagerung.
+    let receipts;
+    try {
+      receipts = JSON.parse(data.value);
+    } catch (e) {
+      return data; // kaputtes JSON unverändert durchreichen, App.jsx meldet es
     }
-    const data = await res.json();
-    return data; // null oder {key, value, shared}
+    const restored = await restoreLogos(receipts, readRaw);
+    return { ...data, value: JSON.stringify(restored) };
   },
 
   async set(key, value, shared = false) {
-    const res = await fetch(`/api/storage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key, value, shared }),
-    });
-    if (!res.ok) {
-      throw new Error(`storage.set fehlgeschlagen: ${res.status}`);
+    if (key !== RECEIPTS_KEY) return rawSet(key, value, shared);
+
+    // Logos einmal separat ablegen und in den Quittungen nur referenzieren —
+    // sonst wüchse dieser eine Wert um ~100 KB pro Quittung.
+    let receipts;
+    try {
+      receipts = JSON.parse(value);
+    } catch (e) {
+      return rawSet(key, value, shared);
     }
-    return res.json();
+    const slim = await externalizeLogos(receipts, (logoKey, dataUrl) =>
+      rawSet(logoKey, dataUrl, false)
+    );
+    return rawSet(key, JSON.stringify(slim), shared);
   },
 
   async delete(key, shared = false) {

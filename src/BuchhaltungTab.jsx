@@ -113,7 +113,10 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
       const filename = `Buchhaltung_${selectedMonth === "all" ? "Jahr" : MONTH_NAMES[selectedMonth]}_${selectedYear}.xlsx`;
       XLSX.writeFile(workbook, filename);
     } catch (e) {
+      // Vorher nur console.error: der Knopf sprang einfach zurück, ohne Datei
+      // und ohne Meldung — der Benutzer konnte nicht wissen, was los war.
       console.error("Excel-Export fehlgeschlagen", e);
+      alert(`Excel-Export fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
     } finally {
       setExporting(false);
     }

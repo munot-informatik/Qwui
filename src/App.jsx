@@ -210,19 +210,30 @@ export default function ReceiptApp() {
     })();
   }, []);
 
+  // Liefert true/false zurück, statt Fehler nur zu schlucken — Aufrufer, die
+  // dem Benutzer Erfolg melden (z.B. der Backup-Import), müssen wissen, ob
+  // tatsächlich gespeichert wurde. Wirft bewusst nicht: die vielen
+  // Feuer-und-Vergiss-Aufrufer (Kunde speichern, bezahlt-Häkchen) zeigen den
+  // Fehler weiterhin nur über das persistError-Banner an.
   async function persist(key, value, setter) {
     setter(value);
     try {
       await window.storage.set(key, JSON.stringify(value), false);
       setPersistError("");
+      return true;
     } catch (e) {
       console.error("Speichern fehlgeschlagen", e);
       setPersistError(`Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
+      return false;
     }
   }
 
   async function saveCompany() {
-    await persist(KEYS.company, companyDraft, setCompany);
+    // Nur melden, was auch passiert ist: bisher stand "Firmendaten gespeichert"
+    // selbst dann da, wenn der Schreibzugriff fehlschlug (gleichzeitig mit dem
+    // roten Fehlerbanner darüber — zwei widersprüchliche Meldungen).
+    const ok = await persist(KEYS.company, companyDraft, setCompany);
+    if (!ok) return;
     setSaveStatus("Firmendaten gespeichert");
     setTimeout(() => setSaveStatus(""), 2000);
   }
@@ -325,13 +336,26 @@ export default function ReceiptApp() {
     setImporting(true);
     try {
       const importedCompany = importPreview.company || emptyCompany;
-      await persist(KEYS.company, importedCompany, setCompany);
+      const okCompany = await persist(KEYS.company, importedCompany, setCompany);
       setCompanyDraft(importedCompany);
-      await persist(KEYS.customers, importPreview.customers || [], setCustomers);
-      await persist(KEYS.receipts, importPreview.receipts || [], setReceipts);
-      setImportPreview(null);
-      setSaveStatus("Backup importiert");
-      setTimeout(() => setSaveStatus(""), 3000);
+      const okCustomers = await persist(KEYS.customers, importPreview.customers || [], setCustomers);
+      const okReceipts = await persist(KEYS.receipts, importPreview.receipts || [], setReceipts);
+
+      // Erfolg nur melden, wenn wirklich alles geschrieben wurde. Sonst bleibt
+      // die Bestätigung stehen, damit der Import wiederholt werden kann — der
+      // React-State zeigt sonst die importierten Daten an, während in der
+      // Datenbank noch die alten stehen und beim nächsten Laden zurückkommen.
+      if (okCompany && okCustomers && okReceipts) {
+        setImportPreview(null);
+        setSaveStatus("Backup importiert");
+        setTimeout(() => setSaveStatus(""), 3000);
+      } else {
+        setImportError(
+          "Import fehlgeschlagen — die Daten konnten nicht gespeichert werden. " +
+            "Angezeigt werden vorerst die importierten Daten, gespeichert ist aber " +
+            "noch der alte Stand. Bitte erneut versuchen."
+        );
+      }
     } finally {
       setImporting(false);
     }
@@ -421,8 +445,17 @@ export default function ReceiptApp() {
       // als bezahlt gelten, obwohl noch niemand die Rechnung beglichen hat.
       const wasQrBill = !!existing.qrBillEnabled;
       const paid = isQrBill ? (wasQrBill ? !!existing.paid : false) : true;
+      // Die Quittung trägt einen eigenen Firmen-Snapshot, damit alte Belege
+      // nicht rückwirkend mutieren, wenn sich die Firmendaten ändern. Wird
+      // beim Bearbeiten aber NEU eine QR-Rechnung daraus, muss der Snapshot
+      // die aktuellen Zahlungsdaten enthalten: sonst prüft isQrBill die IBAN
+      // der *heutigen* Firmendaten, der Einzahlungsschein wird danach aber aus
+      // dem *alten* Snapshot gebaut — mit leerer IBAN und damit unbezahlbar.
+      const snapshotIbanUsable = isValidSwissIban(existing.company?.qrBill?.iban);
+      const companySnapshot = isQrBill && !snapshotIbanUsable ? company : existing.company;
       const updated = {
         ...existing,
+        company: companySnapshot,
         date,
         customer: { ...activeCustomer },
         items: validItems,
@@ -689,7 +722,12 @@ export default function ReceiptApp() {
   return (
     <div className="receipt-app" style={styles.appWrap}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+        /* Schriften liegen lokal unter public/fonts (siehe index.html). Vorher
+           wurden sie per @import direkt von fonts.googleapis.com geladen — das
+           schickt bei jedem Seitenaufruf IP und User-Agent jedes Nutzers an
+           Google, was für ein passwortgeschütztes Werkzeug mit Schweizer
+           Kundendaten (DSG/DSGVO) unnötig ist. Lokal ausgeliefert funktioniert
+           die App ausserdem vollständig offline. */
         .receipt-app { font-family: 'IBM Plex Sans', sans-serif; color: #16181D; }
         .mono { font-family: 'IBM Plex Mono', monospace; }
         .receipt-app input, .receipt-app textarea {

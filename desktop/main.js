@@ -43,6 +43,25 @@ if (!gotLock) {
       },
     });
 
+    // Ohne diese beiden Handler funktionieren "Per E-Mail senden" und "Per
+    // WhatsApp senden" in der Desktop-Version nicht: window.location.href =
+    // "mailto:…" würde Chromium im Renderer selbst zu navigieren versuchen
+    // (kein Protokoll-Handler -> passiert nichts bzw. die App verschwindet),
+    // und window.open("https://wa.me/…") würde ein nacktes Electron-Fenster
+    // ohne Adressleiste öffnen statt den Standardbrowser.
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      openExternally(url);
+      return { action: "deny" };
+    });
+
+    mainWindow.webContents.on("will-navigate", (event, url) => {
+      // Die eigene App (file:// bzw. der Dev-Server) darf normal navigieren,
+      // alles andere gehört ins Betriebssystem.
+      if (isInternalUrl(url)) return;
+      event.preventDefault();
+      openExternally(url);
+    });
+
     const devServerUrl = process.env.QWUI_DEV_SERVER_URL;
     if (devServerUrl) {
       mainWindow.loadURL(devServerUrl);
@@ -51,6 +70,31 @@ if (!gotLock) {
     }
 
     buildMenu();
+  }
+
+  // Nur Protokolle weiterreichen, die auch wirklich für den Nutzer gedacht
+  // sind — kein blindes shell.openExternal() auf beliebige Schemata (z.B.
+  // "file:" oder Windows-eigene Handler), das wäre ein bequemer Weg, aus der
+  // Seite heraus Programme zu starten.
+  const EXTERNAL_PROTOCOLS = new Set(["https:", "http:", "mailto:", "tel:"]);
+
+  function isInternalUrl(url) {
+    const devServerUrl = process.env.QWUI_DEV_SERVER_URL;
+    if (url.startsWith("file://")) return true;
+    if (devServerUrl && url.startsWith(devServerUrl)) return true;
+    return false;
+  }
+
+  function openExternally(url) {
+    let protocol;
+    try {
+      protocol = new URL(url).protocol;
+    } catch (e) {
+      return;
+    }
+    if (EXTERNAL_PROTOCOLS.has(protocol)) {
+      shell.openExternal(url);
+    }
   }
 
   function buildMenu() {

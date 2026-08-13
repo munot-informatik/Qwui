@@ -28,15 +28,91 @@ function chf(n) {
   return num.toLocaleString("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Die eingebetteten Standardschriften (Helvetica) können nur WinAnsi/Latin-1
+// codieren — pdf-lib wirft bei jedem anderen Zeichen einen harten Fehler und
+// die GESAMTE PDF-Erzeugung bricht ab. In der Schweiz sind Namen wie "Šarić",
+// "Đorđević" oder "Łukasz" alltäglich, d.h. für diese Kunden liesse sich sonst
+// nie eine PDF/Mahnung erstellen. Darum werden solche Zeichen hier auf ihre
+// nächstliegende Latin-1-Entsprechung abgebildet (Umlaute/Akzente bleiben
+// unverändert, die sind in WinAnsi enthalten) und alles restlos Unbekannte
+// wird zu "?" — eine PDF mit einem ersetzten Zeichen ist deutlich besser als
+// gar keine PDF.
+const TRANSLITERATIONS = {
+  Š: "S", š: "s", Ž: "Z", ž: "z", Č: "C", č: "c", Ć: "C", ć: "c",
+  Đ: "Dj", đ: "dj", Ł: "L", ł: "l", Ń: "N", ń: "n", Ő: "O", ő: "o",
+  Ř: "R", ř: "r", Ś: "S", ś: "s", Ş: "S", ş: "s", Ť: "T", ť: "t",
+  Ű: "U", ű: "u", Ź: "Z", ź: "z", Ż: "Z", ż: "z", Ě: "E", ě: "e",
+  Ď: "D", ď: "d", Ň: "N", ň: "n", Ų: "U", ų: "u", Ā: "A", ā: "a",
+  Ē: "E", ē: "e", Ī: "I", ī: "i", Ū: "U", ū: "u", Ğ: "G", ğ: "g",
+  İ: "I", ı: "i", Ș: "S", ș: "s", Ț: "T", ț: "t", Ả: "A", ả: "a",
+  "‐": "-", "‑": "-", "‒": "-", "−": "-", "→": "->", "←": "<-",
+  "≥": ">=", "≤": "<=", "≠": "!=", "…": "...", "„": '"', "‚": "'",
+};
+
+// WinAnsi (CP1252) deckt ASCII, Latin-1 und einige Sonderzeichen im Bereich
+// 0x80–0x9F ab. Alles ausserhalb kann Helvetica nicht darstellen.
+const WINANSI_EXTRA = new Set([
+  "€", "‚", "ƒ", "„", "…", "†", "‡", "ˆ", "‰", "Š", "‹", "Œ", "Ž",
+  "‘", "’", "“", "”", "•", "–", "—", "˜", "™", "š", "›", "œ", "ž", "Ÿ",
+]);
+
+function isWinAnsiEncodable(ch) {
+  const code = ch.codePointAt(0);
+  if (code === 0x20ac || WINANSI_EXTRA.has(ch)) return true;
+  // C0/C1-Steuerzeichen ausgenommen, sonst ASCII + Latin-1-Supplement.
+  if (code >= 0x20 && code <= 0x7e) return true;
+  if (code >= 0xa0 && code <= 0xff) return true;
+  return false;
+}
+
+export function toWinAnsiSafe(str) {
+  const input = str == null ? "" : String(str);
+  let out = "";
+  for (const ch of input) {
+    if (isWinAnsiEncodable(ch)) {
+      out += ch;
+    } else if (TRANSLITERATIONS[ch]) {
+      out += TRANSLITERATIONS[ch];
+    } else {
+      // Kombinierende Akzente abtrennen (z.B. "ệ" -> "e"), sonst "?".
+      const stripped = ch.normalize("NFD").replace(/[̀-ͯ]/g, "");
+      out += stripped && [...stripped].every(isWinAnsiEncodable) ? stripped : "?";
+    }
+  }
+  return out;
+}
+
 function formatDateDE(iso) {
   if (!iso) return "";
   const [y, m, d] = iso.split("-");
   return `${d}.${m}.${y}`;
 }
 
+// Normalsatz Schweiz, identisch zu VAT_RATE in src/App.jsx. Nur als Rückfall
+// gedacht: Quittungen speichern ihren eigenen vatRate mit, damit alte Belege
+// nach einer Satzänderung weiterhin ihren damaligen Satz zeigen.
+const FALLBACK_VAT_RATE = 0.081;
+
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+// Liefert Satz, Netto und MWST-Betrag für die Aufschlüsselung. Ältere bzw. aus
+// einem Backup importierte Quittungen können vatRate/netTotal/vatAmount nicht
+// gesetzt haben — ohne diese Rückfälle stünde dann "MWST 0.0 %" und
+// "Netto CHF 0.00" auf der PDF, während die Bildschirmansicht (die 8.1 % fest
+// verdrahtet hat) etwas anderes zeigt.
+function vatFigures(receipt) {
+  const total = Number(receipt.total) || 0;
+  const rate = Number(receipt.vatRate) > 0 ? Number(receipt.vatRate) : FALLBACK_VAT_RATE;
+  const netTotal = Number(receipt.netTotal) > 0 ? Number(receipt.netTotal) : round2(total / (1 + rate));
+  const vatAmount = Number(receipt.vatAmount) > 0 ? Number(receipt.vatAmount) : round2(total - netTotal);
+  return { rate, netTotal, vatAmount };
+}
+
 // Bricht einen Text so um, dass jede Zeile innerhalb von maxWidth passt.
 function wrapText(text, font, size, maxWidth) {
-  const words = (text || "").split(/\s+/).filter(Boolean);
+  const words = toWinAnsiSafe(text).split(/\s+/).filter(Boolean);
   const lines = [];
   let current = "";
   for (const word of words) {
@@ -133,7 +209,7 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
   let y = PAGE_H - MARGIN;
 
   function text(str, x, yPos, { size = 9, f = font, color = COLOR.ink } = {}) {
-    page.drawText(str || "", { x, y: yPos, size, font: f, color });
+    page.drawText(toWinAnsiSafe(str), { x, y: yPos, size, font: f, color });
   }
 
   function line(x1, yPos, x2, color = COLOR.line, width = 1) {
@@ -147,10 +223,21 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
   let leftY = y;
   text(company.name || "Firma", textX, leftY, { size: 12, f: fontBold });
   leftY -= 14;
-  [company.address, company.zipCity, company.email, company.phone].filter(Boolean).forEach((l) => {
-    text(l, textX, leftY, { size: 8.5, color: COLOR.gray });
-    leftY -= 11;
-  });
+  // MWST-Nummer gehört auf jede Rechnung eines steuerpflichtigen Unternehmens
+  // (Art. 26 MWSTG) — sie stand bisher nur in der Bildschirm-Vorschau, nicht
+  // in der PDF, die der Kunde tatsächlich bekommt.
+  [
+    company.address,
+    company.zipCity,
+    company.email,
+    company.phone,
+    company.vatNumber ? `MWST-Nr. ${company.vatNumber}` : "",
+  ]
+    .filter(Boolean)
+    .forEach((l) => {
+      text(l, textX, leftY, { size: 8.5, color: COLOR.gray });
+      leftY -= 11;
+    });
 
   const rightX = PAGE_W - MARGIN;
   // Mit aktivierter QR-Rechnung ist die Quittung noch nicht bezahlt und
@@ -206,15 +293,40 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
     y -= 12;
   });
 
-  if (y < MARGIN + mm(45)) {
+  // Platz für Total + Schlusszeile + Unterschrift, bei aktivierter MWST
+  // zusätzlich für die dreizeilige Aufschlüsselung darüber.
+  const totalBlockHeight = MARGIN + mm(45) + (receipt.vatEnabled ? mm(15) : 0);
+  if (y < totalBlockHeight) {
     page = pdfDoc.addPage([PAGE_W, PAGE_H]);
     y = PAGE_H - MARGIN;
+  }
+
+  // MWST-Aufschlüsselung (Netto / MWST / Total inkl.) — muss auf der PDF
+  // stehen, sonst ist das Dokument keine gültige MWST-Rechnung und der Kunde
+  // kann die Vorsteuer nicht abziehen. Die Bildschirm-Vorschau zeigt sie
+  // bereits, die PDF bisher nicht.
+  if (receipt.vatEnabled) {
+    const { rate, netTotal, vatAmount } = vatFigures(receipt);
+    y -= 2;
+    line(MARGIN, y, PAGE_W - MARGIN, COLOR.line, 0.75);
+    y -= 14;
+    [
+      ["Netto", chf(netTotal)],
+      [`MWST ${(rate * 100).toFixed(1)} %`, chf(vatAmount)],
+    ].forEach(([label, value]) => {
+      text(label, MARGIN, y, { size: 9.5, color: COLOR.gray });
+      const valueStr = `CHF ${value}`;
+      const valueWidth = font.widthOfTextAtSize(valueStr, 9.5);
+      text(valueStr, PAGE_W - MARGIN - valueWidth, y, { size: 9.5 });
+      y -= 13;
+    });
+    y -= 1;
   }
 
   y -= 2;
   line(MARGIN, y, PAGE_W - MARGIN, COLOR.ink, 1.5);
   y -= 16;
-  text("Total", MARGIN, y, { size: 10.5, f: fontBold });
+  text(receipt.vatEnabled ? "Total (inkl. MWST)" : "Total", MARGIN, y, { size: 10.5, f: fontBold });
   const totalStr = `CHF ${chf(receipt.total)}`;
   const totalWidth = fontBold.widthOfTextAtSize(totalStr, 10.5);
   text(totalStr, PAGE_W - MARGIN - totalWidth, y, { size: 10.5, f: fontBold, color: COLOR.red });
@@ -237,7 +349,9 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
   line(MARGIN, y, PAGE_W - MARGIN, COLOR.line, 0.75);
   y -= 12;
   text("Unterschrift", MARGIN, y, { size: 8.5, color: COLOR.gray });
-  const sigWidth = fontOblique.widthOfTextAtSize(company.name || "", 9.5);
+  // Breite auf dem bereinigten Text messen, sonst stimmt die Rechtsbündigkeit
+  // nicht, wenn toWinAnsiSafe() Zeichen ersetzt hat (z.B. "Đ" -> "Dj").
+  const sigWidth = fontOblique.widthOfTextAtSize(toWinAnsiSafe(company.name), 9.5);
   text(company.name || "", PAGE_W - MARGIN - sigWidth, y, { size: 9.5, f: fontOblique });
   y -= 20;
 
@@ -268,7 +382,7 @@ export async function generateMahnungPdf(receipt, qrPngBytes) {
   let y = PAGE_H - MARGIN;
 
   function text(str, x, yPos, { size = 9, f = font, color = COLOR.ink } = {}) {
-    page.drawText(str || "", { x, y: yPos, size, font: f, color });
+    page.drawText(toWinAnsiSafe(str), { x, y: yPos, size, font: f, color });
   }
 
   function line(x1, yPos, x2, color = COLOR.line, width = 1) {
@@ -282,10 +396,18 @@ export async function generateMahnungPdf(receipt, qrPngBytes) {
   let leftY = y;
   text(company.name || "Firma", textX, leftY, { size: 12, f: fontBold });
   leftY -= 14;
-  [company.address, company.zipCity, company.email, company.phone].filter(Boolean).forEach((l) => {
-    text(l, textX, leftY, { size: 8.5, color: COLOR.gray });
-    leftY -= 11;
-  });
+  [
+    company.address,
+    company.zipCity,
+    company.email,
+    company.phone,
+    company.vatNumber ? `MWST-Nr. ${company.vatNumber}` : "",
+  ]
+    .filter(Boolean)
+    .forEach((l) => {
+      text(l, textX, leftY, { size: 8.5, color: COLOR.gray });
+      leftY -= 11;
+    });
 
   const rightX = PAGE_W - MARGIN;
   const titleStr = "MAHNUNG";
@@ -353,7 +475,9 @@ export async function generateMahnungPdf(receipt, qrPngBytes) {
 
   text("Freundliche Grüsse", MARGIN, y, { size: 9 });
   y -= 16;
-  const sigWidth = fontOblique.widthOfTextAtSize(company.name || "", 9.5);
+  // Breite auf dem bereinigten Text messen, sonst stimmt die Rechtsbündigkeit
+  // nicht, wenn toWinAnsiSafe() Zeichen ersetzt hat (z.B. "Đ" -> "Dj").
+  const sigWidth = fontOblique.widthOfTextAtSize(toWinAnsiSafe(company.name), 9.5);
   text(company.name || "", MARGIN, y, { size: 9.5, f: fontOblique });
   y -= 30;
 
@@ -380,7 +504,7 @@ async function drawQrSlip(pdfDoc, page, receipt, qrPngBytes, { font, fontBold })
   const pad = mm(5);
 
   function t(str, x, yPos, { size = 8, f = font, color = COLOR.black } = {}) {
-    page.drawText(str || "", { x, y: yPos, size, font: f, color });
+    page.drawText(toWinAnsiSafe(str), { x, y: yPos, size, font: f, color });
   }
   function label(str, x, yPos) {
     t(str, x, yPos, { size: 6, f: fontBold, color: COLOR.black });
