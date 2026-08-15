@@ -9,7 +9,15 @@
 // Cloudflare Pages führt diese Datei automatisch für JEDEN Request aus, da sie unter
 // /functions/_middleware.js liegt (Cloudflare-Konvention, kein Import nötig).
 
-const MAX_ATTEMPTS = 10;
+// Bewusst hoch angesetzt. Vor dieser Middleware steht Cloudflare Access:
+// unangemeldete Anfragen werden schon dort mit einer Weiterleitung abgewiesen
+// und erreichen die Passwortprüfung nie. Das Passwort selbst ist 20 Zeichen
+// lang — Durchprobieren ist ohnehin aussichtslos. Ein niedriges Limit würde
+// deshalb keinen Angreifer aufhalten, sondern nur den rechtmässigen Nutzer
+// aussperren (etwa wenn der Browser nach einer Passwortänderung noch das alte
+// mitschickt). Bleibt als reine Bremse gegen davonlaufende Schleifen, die
+// sonst unbegrenzt Schreibzugriffe auf D1 erzeugen würden.
+const MAX_ATTEMPTS = 100;
 const WINDOW_MS = 15 * 60 * 1000; // 15 Minuten
 
 function unauthorized() {

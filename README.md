@@ -280,9 +280,14 @@ Kurzüberblick, was bereits eingebaut ist:
   nicht im Client-Code auslesbar.
 - **Konstante-Zeit-Vergleich** des Passworts (SHA-256-Hash-Vergleich statt direktem
   String-Vergleich) — kein Timing-Seitenkanal.
-- **Rate-Limiting**: nach 10 fehlgeschlagenen Login-Versuchen pro IP innerhalb von
-  15 Minuten wird mit `429 Too Many Requests` gesperrt, ohne das Passwort weiter zu
-  prüfen. Erfolgreiche Logins verursachen dabei keinen zusätzlichen Datenbankzugriff.
+- **Rate-Limiting**: nach 100 fehlgeschlagenen Login-Versuchen pro IP innerhalb von
+  15 Minuten wird mit `429 Too Many Requests` gesperrt. Die Sperre wird VOR dem
+  Passwortvergleich geprüft — sonst käme ein Angreifer mit einem Glückstreffer
+  trotz überschrittenem Limit durch und das Limit wäre wirkungslos.
+  Die Grenze ist bewusst hoch: davor steht bereits Cloudflare Access, und ein
+  20-stelliges Passwort lässt sich ohnehin nicht durchprobieren. Ein niedriger
+  Wert würde daher nur den rechtmässigen Nutzer aussperren. Übrig bleibt eine
+  Bremse gegen Schleifen, die sonst unbegrenzt in die Datenbank schreiben.
 - **Parametrisierte D1-Queries** überall — kein SQL-Injection-Risiko.
 - **`database_id` in `wrangler.toml` ist unbedenklich** im Repo (siehe Hinweis in
   Abschnitt 7) — kein Geheimnis, sondern nur ein Bezeichner.
@@ -324,7 +329,7 @@ führende/nachfolgende Leerzeichen) und danach neu deployen — Variablenänderu
 gelten erst ab dem nächsten Deployment.
 
 **"Zu viele fehlgeschlagene Versuche" (429)**
-Rate-Limiting hat nach 10 Fehlversuchen in 15 Minuten gegriffen (siehe
+Rate-Limiting hat nach 100 Fehlversuchen in 15 Minuten gegriffen (siehe
 Abschnitt 12). Der `Retry-After`-Header in der Antwort gibt an, in wie vielen
 Sekunden es weitergeht — einfach kurz warten und erneut versuchen.
 
