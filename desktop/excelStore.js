@@ -7,7 +7,7 @@
 // atomar zurück, sodass ein Kunden-Save nie einen kurz zuvor erfolgten
 // Quittungs-Save überschreiben kann (und umgekehrt).
 //
-// statusOf/isOverdue/OVERDUE_THRESHOLD_DAYS sind bewusst als kleine, eigene
+// statusOf/isOverdue/paymentTermOf sind bewusst als kleine, eigene
 // Kopie hier drin (identisch zu src/BuchhaltungTab.jsx) statt über ein
 // gemeinsames Modul geteilt — folgt demselben Duplizierungs-Muster, das im
 // Projekt schon für kleine Helfer (chf, formatDateDE) an mehreren Stellen
@@ -52,7 +52,14 @@ const RECEIPT_HEADERS = [
   "Rohdaten (JSON – von Qwui verwaltet, bitte nicht bearbeiten)",
 ];
 
-const OVERDUE_THRESHOLD_DAYS = 30;
+// Rückfall-Zahlungsfrist für Belege ohne eigenes paymentTermDays (Alt-Belege).
+const DEFAULT_PAYMENT_TERM_DAYS = 30;
+
+// Individuelle Zahlungsfrist einer Rechnung in Tagen (siehe src/App.jsx).
+function paymentTermOf(receipt) {
+  const d = Number(receipt?.paymentTermDays);
+  return Number.isFinite(d) && d >= 0 ? d : DEFAULT_PAYMENT_TERM_DAYS;
+}
 
 const STATUS_STYLE = {
   gruen: { fill: "FFEAF6EE", font: "FF155C2C" },
@@ -77,7 +84,7 @@ function daysSince(iso) {
 }
 
 function isOverdue(receipt) {
-  return statusOf(receipt) === "offen" && daysSince(receipt.date) > OVERDUE_THRESHOLD_DAYS;
+  return statusOf(receipt) === "offen" && daysSince(receipt.date) > paymentTermOf(receipt);
 }
 
 function documentWord(receipt) {
@@ -376,7 +383,7 @@ export const writeReceiptsList = (list) =>
 
     for (const receipt of sorted) {
       const info = statusInfo(receipt);
-      const dueDate = receipt.qrBillEnabled ? addDaysISO(receipt.date, OVERDUE_THRESHOLD_DAYS) : "";
+      const dueDate = receipt.qrBillEnabled ? addDaysISO(receipt.date, paymentTermOf(receipt)) : "";
       const rohdaten = await serializeReceipt(receipt);
 
       const row = sheet.addRow([

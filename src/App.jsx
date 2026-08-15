@@ -146,6 +146,23 @@ function documentWord(receipt) {
   return receipt.qrBillEnabled ? "Rechnung" : "Quittung";
 }
 
+// Auswählbare Zahlungsfristen (in Tagen) für QR-Rechnungen. 30 Tage ist der
+// bisherige Standard und bleibt Vorauswahl.
+const PAYMENT_TERM_OPTIONS = [10, 14, 20, 30, 60];
+const DEFAULT_PAYMENT_TERM_DAYS = 30;
+
+// Zahlungsfrist einer Rechnung in Tagen. Fällt auf 30 zurück, wenn nichts
+// gesetzt ist — so bleiben Alt-Rechnungen (vor dieser Funktion) und aus
+// Backups importierte Belege unverändert bei 30 Tagen.
+function paymentTermOf(receipt) {
+  const d = Number(receipt?.paymentTermDays);
+  return Number.isFinite(d) && d >= 0 ? d : DEFAULT_PAYMENT_TERM_DAYS;
+}
+
+function dayWord(n) {
+  return n === 1 ? "Tag" : "Tagen";
+}
+
 export default function ReceiptApp() {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("new");
@@ -170,6 +187,7 @@ export default function ReceiptApp() {
   const [note, setNote] = useState("");
   const [vatEnabled, setVatEnabled] = useState(false);
   const [qrBillEnabled, setQrBillEnabled] = useState(false);
+  const [paymentTermDays, setPaymentTermDays] = useState(DEFAULT_PAYMENT_TERM_DAYS);
 
   const [newCustomer, setNewCustomer] = useState(emptyPerson);
 
@@ -416,6 +434,7 @@ export default function ReceiptApp() {
     setNote("");
     setVatEnabled(false);
     setQrBillEnabled(false);
+    setPaymentTermDays(DEFAULT_PAYMENT_TERM_DAYS);
   }
 
   function getActiveCustomer() {
@@ -465,6 +484,7 @@ export default function ReceiptApp() {
         vatAmount,
         total,
         qrBillEnabled: isQrBill,
+        paymentTermDays,
         paid,
         note,
         editedAt: new Date().toISOString(),
@@ -491,6 +511,7 @@ export default function ReceiptApp() {
       vatAmount,
       total,
       qrBillEnabled: isQrBill,
+      paymentTermDays,
       paid: !isQrBill,
       note,
       company,
@@ -527,6 +548,7 @@ export default function ReceiptApp() {
     setNote(r.note || "");
     setVatEnabled(!!r.vatEnabled);
     setQrBillEnabled(!!r.qrBillEnabled);
+    setPaymentTermDays(paymentTermOf(r));
     setEditingReceiptId(r.id);
     setMode("form");
     setTab("new");
@@ -696,7 +718,7 @@ export default function ReceiptApp() {
       // die WhatsApp-Nachricht ist reiner Text ohne Anhang, das würde einen
       // nicht vorhandenen Anhang suggerieren.
       receipt.qrBillEnabled
-        ? "Zahlbar per Rechnung innert 30 Tagen (Einzahlungsschein siehe PDF)."
+        ? `Zahlbar per Rechnung innert ${paymentTermOf(receipt)} ${dayWord(paymentTermOf(receipt))} (Einzahlungsschein siehe PDF).`
         : "Betrag dankend erhalten."
     );
     if (receipt.company.name) lines.push(receipt.company.name);
@@ -991,6 +1013,25 @@ export default function ReceiptApp() {
                       Bezahlbar per Rechnung <span style={styles.docMuted}>(QR-Einzahlungsschein)</span>
                     </span>
                   </button>
+
+                  {qrBillEnabled && (
+                    <div style={styles.paymentTermRow}>
+                      <span style={styles.paymentTermLabel}>Zahlbar innert</span>
+                      <select
+                        value={paymentTermDays}
+                        onChange={(e) => setPaymentTermDays(Number(e.target.value))}
+                        style={styles.paymentTermSelect}
+                        aria-label="Zahlungsfrist in Tagen"
+                      >
+                        {PAYMENT_TERM_OPTIONS.map((d) => (
+                          <option key={d} value={d}>
+                            {d} {dayWord(d)}
+                          </option>
+                        ))}
+                      </select>
+                      <span style={styles.paymentTermLabel}>ab Rechnungsdatum</span>
+                    </div>
+                  )}
 
                   {qrBillEnabled && !isValidSwissIban(company.qrBill?.iban) && (
                     <div style={styles.hint}>
@@ -1556,7 +1597,8 @@ function ReceiptDocument({ receipt }) {
       <div style={{ ...styles.docSection, marginTop: 24 }}>
         {receipt.qrBillEnabled ? (
           <div style={{ fontSize: 13 }}>
-            Zahlbar per beiliegendem Einzahlungsschein innert 30 Tagen.
+            Zahlbar per beiliegendem Einzahlungsschein innert {paymentTermOf(receipt)}{" "}
+            {dayWord(paymentTermOf(receipt))}.
           </div>
         ) : (
           <div style={{ fontSize: 13 }}>
@@ -1777,6 +1819,24 @@ const styles = {
     fontWeight: 500,
     color: "#16181D",
     textAlign: "left",
+  },
+  paymentTermRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 10,
+    flexWrap: "wrap",
+  },
+  paymentTermLabel: {
+    fontSize: 13,
+    color: "#5B5F66",
+  },
+  paymentTermSelect: {
+    padding: "6px 8px",
+    border: "1px solid #DADDE1",
+    fontSize: 13,
+    background: "#fff",
+    color: "#16181D",
   },
   vatBreakdown: {
     marginTop: 10,

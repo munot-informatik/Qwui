@@ -26,7 +26,14 @@ const MONTH_NAMES = [
   "Juli", "August", "September", "Oktober", "November", "Dezember",
 ];
 
-const OVERDUE_THRESHOLD_DAYS = 30;
+// Rückfall-Zahlungsfrist für Belege ohne eigenes paymentTermDays (Alt-Belege).
+const DEFAULT_PAYMENT_TERM_DAYS = 30;
+
+// Individuelle Zahlungsfrist einer Rechnung in Tagen (siehe src/App.jsx).
+function paymentTermOf(receipt) {
+  const d = Number(receipt?.paymentTermDays);
+  return Number.isFinite(d) && d >= 0 ? d : DEFAULT_PAYMENT_TERM_DAYS;
+}
 
 function statusOf(receipt) {
   if (receipt.qrBillEnabled) {
@@ -41,10 +48,15 @@ function statusLabel(status) {
   return "Direktzahlung";
 }
 
-// Offene QR-Rechnung, deren Zahlungsfrist (30 Tage ab Rechnungsdatum, siehe
-// Hinweistext auf der Quittung) bereits abgelaufen ist.
+// Offene QR-Rechnung, deren individuelle Zahlungsfrist ab Rechnungsdatum
+// (siehe Hinweistext auf der Rechnung) bereits abgelaufen ist.
 function isOverdue(receipt) {
-  return statusOf(receipt) === "offen" && daysSince(receipt.date) > OVERDUE_THRESHOLD_DAYS;
+  return statusOf(receipt) === "offen" && daysSince(receipt.date) > paymentTermOf(receipt);
+}
+
+// Tage über die Zahlungsfrist hinaus (>= 1, wenn überfällig).
+function daysOverdue(receipt) {
+  return daysSince(receipt.date) - paymentTermOf(receipt);
 }
 
 export default function BuchhaltungTab({ receipts, onTogglePaid }) {
@@ -178,14 +190,14 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
       <div style={styles.legend}>
         <span style={styles.legendItem}><span style={{ ...styles.dot, background: "#B00020" }} /> Offene Rechnung</span>
         <span style={styles.legendItem}><span style={{ ...styles.dot, background: "#1D7A3C" }} /> Bezahlt / Direktzahlung</span>
-        <span style={styles.legendItem}><AlertTriangle size={12} color="#B5480C" /> Überfällig (&gt; {OVERDUE_THRESHOLD_DAYS} Tage)</span>
+        <span style={styles.legendItem}><AlertTriangle size={12} color="#B5480C" /> Überfällig (Zahlungsfrist abgelaufen)</span>
       </div>
 
       {overdueCount > 0 && (
         <div style={styles.overdueBanner}>
           <AlertTriangle size={14} color="#B5480C" />
           {overdueCount} offene Rechnung{overdueCount === 1 ? "" : "en"} in diesem Zeitraum
-          {overdueCount === 1 ? " ist" : " sind"} seit mehr als {OVERDUE_THRESHOLD_DAYS} Tagen überfällig.
+          {overdueCount === 1 ? " hat" : " haben"} ihre Zahlungsfrist überschritten.
         </div>
       )}
 
@@ -219,8 +231,7 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
                     {overdue && (
                       <div style={styles.overdueTag}>
                         <AlertTriangle size={11} />
-                        Überfällig seit {daysSince(r.date) - OVERDUE_THRESHOLD_DAYS} Tag
-                        {daysSince(r.date) - OVERDUE_THRESHOLD_DAYS === 1 ? "" : "en"}
+                        Überfällig seit {daysOverdue(r)} Tag{daysOverdue(r) === 1 ? "" : "en"}
                       </div>
                     )}
                   </div>

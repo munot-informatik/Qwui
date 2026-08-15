@@ -97,6 +97,18 @@ function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+// Zahlungsfrist einer Rechnung in Tagen; 30 als Rückfall für Belege ohne Feld
+// (identisch zur Definition in src/App.jsx, bewusst dupliziert wie die anderen
+// kleinen Helfer hier).
+function paymentTermOf(receipt) {
+  const d = Number(receipt?.paymentTermDays);
+  return Number.isFinite(d) && d >= 0 ? d : 30;
+}
+
+function dayWord(n) {
+  return n === 1 ? "Tag" : "Tagen";
+}
+
 // Liefert Satz, Netto und MWST-Betrag für die Aufschlüsselung. Ältere bzw. aus
 // einem Backup importierte Quittungen können vatRate/netTotal/vatAmount nicht
 // gesetzt haben — ohne diese Rückfälle stünde dann "MWST 0.0 %" und
@@ -341,8 +353,9 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
     y -= 6;
   }
 
+  const term = paymentTermOf(receipt);
   const closingText = receipt.qrBillEnabled
-    ? "Zahlbar per beiliegendem Einzahlungsschein innert 30 Tagen."
+    ? `Zahlbar per beiliegendem Einzahlungsschein innert ${term} ${dayWord(term)}.`
     : `Betrag dankend erhalten, ${company.zipCity || "___________"}, ${formatDateDE(receipt.date)}`;
   text(closingText, MARGIN, y, { size: 9 });
   y -= 20;
@@ -441,11 +454,12 @@ export async function generateMahnungPdf(receipt, qrPngBytes) {
   y -= 20;
 
   // ---- Mahntext ----
-  const dueDate = addDaysISO(receipt.date, 30);
+  const term = paymentTermOf(receipt);
+  const dueDate = addDaysISO(receipt.date, term);
   const overdueDays = daysBetweenISO(dueDate, todayISO());
   const bodyText =
     `Wir haben festgestellt, dass die untenstehende Rechnung noch nicht beglichen wurde. ` +
-    `Die Zahlungsfrist von 30 Tagen ist am ${formatDateDE(dueDate)} abgelaufen (seit ${overdueDays} ` +
+    `Die Zahlungsfrist von ${term} ${dayWord(term)} ist am ${formatDateDE(dueDate)} abgelaufen (seit ${overdueDays} ` +
     `Tag${overdueDays === 1 ? "" : "en"} überfällig). Wir bitten Sie, den ausstehenden Betrag innert ` +
     `10 Tagen mit dem beiliegenden Einzahlungsschein zu begleichen. Sollten Sie die Zahlung ` +
     `zwischenzeitlich bereits ausgeführt haben, betrachten Sie dieses Schreiben als gegenstandslos.`;
