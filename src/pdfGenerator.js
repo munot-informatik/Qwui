@@ -109,9 +109,9 @@ function dayWord(n) {
   return n === 1 ? "Tag" : "Tagen";
 }
 
-// ---- Positionen: Produkt/Dienstleistung, Listpreis, Rabatt ----
+// ---- Positionen: Produkt/Dienstleistung, Listenpreis, Rabatt ----
 // Spiegelt bewusst die Helfer aus src/App.jsx (gleiches Duplizierungs-Muster
-// wie chf/formatDateDE). "amount" ist der Listpreis, verrechnet wird der
+// wie chf/formatDateDE). "amount" ist der Listenpreis, verrechnet wird der
 // Betrag nach Rabatt.
 
 function itemKind(it) {
@@ -435,7 +435,7 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
   const ITEM_SAFE_BOTTOM = MARGIN + mm(35); // Reserve für Total + Schlusszeile
 
   // Spaltenraster von rechts: Endbetrag ganz rechts, davor die Rabattangabe,
-  // davor (nur bei Produkten) der durchgestrichene Listpreis.
+  // davor (nur bei Produkten) der durchgestrichene Listenpreis.
   const COL_AMOUNT_RIGHT = PAGE_W - MARGIN;
   const COL_DISCOUNT_RIGHT = COL_AMOUNT_RIGHT - mm(26);
   const COL_LIST_RIGHT = COL_DISCOUNT_RIGHT - mm(24);
@@ -462,7 +462,7 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
     }
 
     if (disc > 0) {
-      // Produkt: Listpreis durchgestrichen anzeigen. Dienstleistung: nur
+      // Produkt: Listenpreis durchgestrichen anzeigen. Dienstleistung: nur
       // Rabatt und neuer Preis (so vom Nutzer gewünscht).
       if (isProduct) {
         const listStr = `CHF ${chf(listPrice)}`;
@@ -509,10 +509,10 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
     y = PAGE_H - MARGIN;
   }
 
-  // Rabatt-Zwischensumme: zeigt, wie viel vom Listpreis abgezogen wurde.
+  // Rabatt-Zwischensumme: zeigt, wie viel vom Listenpreis abgezogen wurde.
   if (discountTotal > 0) {
     [
-      ["Zwischensumme (Listpreise)", `CHF ${chf(receiptListTotal(receipt))}`],
+      ["Zwischensumme (Listenpreise)", `CHF ${chf(receiptListTotal(receipt))}`],
       ["Rabatt", `− CHF ${chf(discountTotal)}`],
     ].forEach(([label, value]) => {
       text(label, MARGIN, y, { size: 9.5, color: COLOR.gray });

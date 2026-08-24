@@ -56,11 +56,11 @@ const emptyCompany = {
   qrBill: { name: "", iban: "", street: "", houseNumber: "", postalCode: "", city: "", country: "CH" },
 };
 
-// ---- Rechnungspositionen: Produkt/Dienstleistung, Listpreis und Rabatt ----
+// ---- Rechnungspositionen: Produkt/Dienstleistung, Listenpreis und Rabatt ----
 // Eine Position speichert in "amount" weiterhin den LISTPREIS (Preis vor
 // Rabatt). Der tatsächlich verrechnete Betrag ergibt sich erst aus
 // itemLineTotal(). Alte Positionen ohne kind/discountPercent verhalten sich
-// exakt wie bisher: Dienstleistung, 0 % Rabatt, Betrag = Listpreis.
+// exakt wie bisher: Dienstleistung, 0 % Rabatt, Betrag = Listenpreis.
 
 function emptyItem() {
   return { id: uid(), description: "", amount: "", kind: "service", discountPercent: "", articleNumber: "" };
@@ -768,7 +768,7 @@ export default function ReceiptApp() {
     );
   }
 
-  // Übernimmt einen Inventar-Artikel in die Position: Name, Listpreis und
+  // Übernimmt einen Inventar-Artikel in die Position: Name, Listenpreis und
   // Artikelnummer. Der Rabatt der Position bleibt bestehen.
   function pickInventoryItem(id, productId) {
     const p = inventory.find((x) => x.id === productId);
@@ -786,7 +786,7 @@ export default function ReceiptApp() {
   const VAT_RATE = 0.081; // Normalsatz Schweiz für Dienstleistungen, Stand 2026
 
   // Summiert die Positionen NACH Rabatt — der eingegebene Betrag ist der
-  // Listpreis, verrechnet wird der reduzierte Betrag.
+  // Listenpreis, verrechnet wird der reduzierte Betrag.
   const enteredSum = items.reduce((sum, it) => sum + itemLineTotal(it), 0);
   const total = round2(enteredSum);
   const discountTotal = round2(items.reduce((sum, it) => sum + itemDiscountAmount(it), 0));
@@ -1326,7 +1326,7 @@ export default function ReceiptApp() {
                                 onChange={(e) => updateItem(it.id, "amount", e.target.value)}
                                 className="mono"
                                 style={{ width: 90, textAlign: "right" }}
-                                title={kind === "product" ? "Listpreis" : "Preis"}
+                                title={kind === "product" ? "Listenpreis" : "Preis"}
                               />
                             </div>
                             <button
@@ -1408,7 +1408,7 @@ export default function ReceiptApp() {
                   {discountTotal > 0 && (
                     <div style={styles.discountSummary}>
                       <div style={styles.vatBreakdownRow}>
-                        <span>Zwischensumme (Listpreise)</span>
+                        <span>Zwischensumme (Listenpreise)</span>
                         <span className="mono">CHF {chf(listTotal)}</span>
                       </div>
                       <div style={styles.vatBreakdownRow}>
@@ -2342,7 +2342,7 @@ function ReceiptDocument({ receipt }) {
                       <span className="mono" style={styles.docArticleNr}> · {it.articleNumber}</span>
                     )}
                   </td>
-                  {/* Beim Produkt zusätzlich der durchgestrichene Listpreis —
+                  {/* Beim Produkt zusätzlich der durchgestrichene Listenpreis —
                       bei der Dienstleistung nur Rabatt und neuer Preis. */}
                   <td className="mono" style={styles.docListPriceCell}>
                     {disc > 0 && isProduct ? (
