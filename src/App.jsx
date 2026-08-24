@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import logoImg from "./assets/logo.png";
 import QrBillDocument from "./QrBillDocument.jsx";
 import BuchhaltungTab from "./BuchhaltungTab.jsx";
 import { buildReceiptPdfBytes } from "./receiptPdf.js";
-import { isValidSwissIban } from "./qrbill.js";
+import { isValidSwissIban, formatIbanDisplay } from "./qrbill.js";
 import {
   Plus,
   Trash2,
@@ -25,6 +25,7 @@ import {
   RefreshCw,
   Download,
   AlertTriangle,
+  Package,
 } from "lucide-react";
 
 // Aktuelle Version des Backup-Dateiformats (siehe exportAllData/handleImportFileSelect).
@@ -36,6 +37,7 @@ const KEYS = {
   company: "company-info",
   customers: "customers-list",
   receipts: "receipts-list",
+  inventory: "inventory-list",
 };
 
 const emptyCompany = {
@@ -46,8 +48,91 @@ const emptyCompany = {
   phone: "",
   vatNumber: "",
   logoDataUrl: "",
+  // Platzierung des Logos im PDF-Kopf. "left" ist das bisherige Verhalten und
+  // bleibt Vorgabe, damit bestehende Firmendaten unverändert aussehen.
+  logoLayout: "inline", // "inline" (neben dem Text) | "above" (über dem Text)
+  logoPosition: "left", // Ausrichtung bei "above": "left" | "center" | "right"
+  logoSize: "medium", // "small" | "medium" | "large"
   qrBill: { name: "", iban: "", street: "", houseNumber: "", postalCode: "", city: "", country: "CH" },
 };
+
+// ---- Rechnungspositionen: Produkt/Dienstleistung, Listpreis und Rabatt ----
+// Eine Position speichert in "amount" weiterhin den LISTPREIS (Preis vor
+// Rabatt). Der tatsächlich verrechnete Betrag ergibt sich erst aus
+// itemLineTotal(). Alte Positionen ohne kind/discountPercent verhalten sich
+// exakt wie bisher: Dienstleistung, 0 % Rabatt, Betrag = Listpreis.
+
+function emptyItem() {
+  return { id: uid(), description: "", amount: "", kind: "service", discountPercent: "", articleNumber: "" };
+}
+
+function itemKind(it) {
+  return it?.kind === "product" ? "product" : "service";
+}
+
+function itemListPrice(it) {
+  return Number(it?.amount) || 0;
+}
+
+// Rabatt in Prozent, auf 0–100 begrenzt — ein Tippfehler wie "1000" darf keine
+// negative Rechnung erzeugen.
+function itemDiscountPercent(it) {
+  const raw = Number(it?.discountPercent);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(100, raw);
+}
+
+function itemDiscountAmount(it) {
+  return round2((itemListPrice(it) * itemDiscountPercent(it)) / 100);
+}
+
+// Verrechneter Betrag der Position nach Abzug des Rabatts.
+function itemLineTotal(it) {
+  return round2(itemListPrice(it) - itemDiscountAmount(it));
+}
+
+function hasDiscount(it) {
+  return itemDiscountPercent(it) > 0;
+}
+
+// Rabatt-Prozentsatz für die Anzeige: ganze Zahlen ohne Nachkommastellen.
+function formatPercent(p) {
+  return Number.isInteger(p) ? String(p) : String(Math.round(p * 100) / 100);
+}
+const emptyProduct = { articleNumber: "", name: "", group: "", stock: "", price: "" };
+
+// Anordnung des Logos im Dokumentkopf: neben dem Firmen-Textblock ("inline")
+// oder auf einer eigenen Zeile darüber ("above"). Firmendaten ohne diese
+// Einstellung verhalten sich wie bisher.
+function logoLayoutOf(company) {
+  if (company?.logoLayout === "above" || company?.logoLayout === "inline") return company.logoLayout;
+  return (company?.logoPosition || "left") === "left" ? "inline" : "above";
+}
+
+// Ausrichtung innerhalb der eigenen Zeile (nur bei "above" wirksam).
+function logoAlignOf(company) {
+  const p = company?.logoPosition || "left";
+  return p === "center" || p === "right" ? p : "left";
+}
+
+// Anzeigename für Artikel ohne zugewiesene Gruppe. Bewusst kein leerer String,
+// damit sich diese Artikel im Filter gezielt auswählen lassen.
+const UNGROUPED_LABEL = "Ohne Gruppe";
+
+function productGroup(p) {
+  const g = (p?.group || "").trim();
+  return g || UNGROUPED_LABEL;
+}
+
+// Alle vorkommenden Gruppen, alphabetisch; "Ohne Gruppe" immer zuletzt.
+function collectGroups(products) {
+  const set = new Set(products.map(productGroup));
+  const named = [...set].filter((g) => g !== UNGROUPED_LABEL).sort((a, b) =>
+    a.localeCompare(b, "de-CH", { sensitivity: "base" })
+  );
+  return set.has(UNGROUPED_LABEL) ? [...named, UNGROUPED_LABEL] : named;
+}
+
 const emptyPerson = {
   name: "",
   address: "", // alte Freitext-Adresse, bleibt für bestehende Kunden erhalten
@@ -177,13 +262,14 @@ export default function ReceiptApp() {
   const [companyDraft, setCompanyDraft] = useState(emptyCompany);
   const [customers, setCustomers] = useState([]);
   const [receipts, setReceipts] = useState([]);
+  const [inventory, setInventory] = useState([]);
   const [currentReceipt, setCurrentReceipt] = useState(null);
   const [editingReceiptId, setEditingReceiptId] = useState(null);
 
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [manualCustomer, setManualCustomer] = useState(emptyPerson);
   const [date, setDate] = useState(todayISO());
-  const [items, setItems] = useState([{ id: uid(), description: "", amount: "" }]);
+  const [items, setItems] = useState([emptyItem()]);
   const [note, setNote] = useState("");
   const [vatEnabled, setVatEnabled] = useState(false);
   const [qrBillEnabled, setQrBillEnabled] = useState(false);
@@ -217,6 +303,13 @@ export default function ReceiptApp() {
         if (r && r.value) setReceipts(JSON.parse(r.value));
       } catch (e) {
         console.error("Laden der Quittungen fehlgeschlagen", e);
+        loadFailed = true;
+      }
+      try {
+        const inv = await window.storage.get(KEYS.inventory);
+        if (inv && inv.value) setInventory(JSON.parse(inv.value));
+      } catch (e) {
+        console.error("Laden des Inventars fehlgeschlagen", e);
         loadFailed = true;
       }
       if (loadFailed) {
@@ -306,6 +399,7 @@ export default function ReceiptApp() {
       company,
       customers,
       receipts,
+      inventory,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -358,12 +452,17 @@ export default function ReceiptApp() {
       setCompanyDraft(importedCompany);
       const okCustomers = await persist(KEYS.customers, importPreview.customers || [], setCustomers);
       const okReceipts = await persist(KEYS.receipts, importPreview.receipts || [], setReceipts);
+      // Ältere Backups (vor dem Inventar) haben kein inventory-Feld — dann
+      // bleibt das bestehende Inventar unangetastet statt gelöscht zu werden.
+      const okInventory = Array.isArray(importPreview.inventory)
+        ? await persist(KEYS.inventory, importPreview.inventory, setInventory)
+        : true;
 
       // Erfolg nur melden, wenn wirklich alles geschrieben wurde. Sonst bleibt
       // die Bestätigung stehen, damit der Import wiederholt werden kann — der
       // React-State zeigt sonst die importierten Daten an, während in der
       // Datenbank noch die alten stehen und beim nächsten Laden zurückkommen.
-      if (okCompany && okCustomers && okReceipts) {
+      if (okCompany && okCustomers && okReceipts && okInventory) {
         setImportPreview(null);
         setSaveStatus("Backup importiert");
         setTimeout(() => setSaveStatus(""), 3000);
@@ -406,12 +505,251 @@ export default function ReceiptApp() {
     if (selectedCustomerId === id) setSelectedCustomerId("");
   }
 
+  // ---- Inventar ----
+  const [newProduct, setNewProduct] = useState(emptyProduct);
+  const [inventoryError, setInventoryError] = useState("");
+  const [inventoryBusy, setInventoryBusy] = useState(false);
+
+  // Ob die Import-Anleitung eingeblendet ist. Reine Anzeige-Einstellung, daher
+  // im Browser gespeichert statt in der Datenbank — wer das System kennt,
+  // blendet sie einmal aus und sie bleibt weg.
+  const [showImportHelp, setShowImportHelp] = useState(() => {
+    try {
+      return window.localStorage.getItem("qwui:importHelpHidden") !== "1";
+    } catch (e) {
+      return true;
+    }
+  });
+
+  function toggleImportHelp() {
+    setShowImportHelp((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem("qwui:importHelpHidden", next ? "0" : "1");
+      } catch (e) {
+        // Privater Modus o.ä. — dann gilt die Einstellung nur für diese Sitzung.
+      }
+      return next;
+    });
+  }
+
+  const [inventorySearch, setInventorySearch] = useState("");
+  const [inventoryGroupFilter, setInventoryGroupFilter] = useState("");
+
+  // Immer alphabetisch — so erscheinen die Artikel in der Rechnungsstellung
+  // und im Inventar in derselben, erwartbaren Reihenfolge.
+  const sortedInventory = [...inventory].sort((a, b) =>
+    (a.name || "").localeCompare(b.name || "", "de-CH", { sensitivity: "base" })
+  );
+
+  const inventoryGroups = collectGroups(inventory);
+
+  // Suche über Name und Artikelnummer, zusätzlich nach Gruppe filterbar.
+  const visibleInventory = sortedInventory.filter((p) => {
+    if (inventoryGroupFilter && productGroup(p) !== inventoryGroupFilter) return false;
+    const q = inventorySearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (p.name || "").toLowerCase().includes(q) ||
+      (p.articleNumber || "").toLowerCase().includes(q) ||
+      (p.group || "").toLowerCase().includes(q)
+    );
+  });
+
+  // Artikel nach Gruppe gebündelt — für die Auswahl in der Rechnungsstellung.
+  const inventoryByGroup = inventoryGroups
+    .map((g) => ({ group: g, items: sortedInventory.filter((p) => productGroup(p) === g) }))
+    .filter((entry) => entry.items.length > 0);
+
+  // Verwirft eine noch ausstehende Tipp-Speicherung: Hinzufügen und Löschen
+  // arbeiten auf dem aktuellen State, der die getippten Änderungen bereits
+  // enthält — der ältere Stand darf danach nicht mehr geschrieben werden.
+  function cancelPendingInventorySave() {
+    if (inventorySaveTimer.current) clearTimeout(inventorySaveTimer.current);
+    inventorySaveTimer.current = null;
+    pendingInventory.current = null;
+  }
+
+  async function addProduct() {
+    if (!newProduct.name.trim()) return;
+    cancelPendingInventorySave();
+    const entry = {
+      id: uid(),
+      articleNumber: newProduct.articleNumber.trim(),
+      name: newProduct.name.trim(),
+      group: newProduct.group.trim(),
+      stock: Number(newProduct.stock) || 0,
+      price: Number(newProduct.price) || 0,
+    };
+    await persist(KEYS.inventory, [...inventory, entry], setInventory);
+    setNewProduct(emptyProduct);
+  }
+
+  // Beim Tippen in der Inventartabelle nicht bei jedem Zeichen speichern —
+  // das wäre ein kompletter Schreibzugriff auf die ganze Liste pro Tastendruck.
+  // Die Anzeige aktualisiert sofort, geschrieben wird kurz nach der letzten
+  // Eingabe.
+  const inventorySaveTimer = useRef(null);
+  const pendingInventory = useRef(null);
+
+  function scheduleInventorySave(next) {
+    pendingInventory.current = next;
+    if (inventorySaveTimer.current) clearTimeout(inventorySaveTimer.current);
+    inventorySaveTimer.current = setTimeout(() => {
+      inventorySaveTimer.current = null;
+      const toSave = pendingInventory.current;
+      pendingInventory.current = null;
+      if (toSave) persist(KEYS.inventory, toSave, setInventory);
+    }, 700);
+  }
+
+  // Ausstehende Änderung noch sichern, wenn die Seite geschlossen wird.
+  useEffect(() => {
+    return () => {
+      if (inventorySaveTimer.current) {
+        clearTimeout(inventorySaveTimer.current);
+        if (pendingInventory.current) {
+          window.storage
+            .set(KEYS.inventory, JSON.stringify(pendingInventory.current), false)
+            .catch((e) => console.error("Inventar-Speichern beim Verlassen fehlgeschlagen", e));
+        }
+      }
+    };
+  }, []);
+
+  function updateProduct(id, field, value) {
+    const next = inventory.map((p) =>
+      p.id === id ? { ...p, [field]: field === "stock" || field === "price" ? Number(value) || 0 : value } : p
+    );
+    setInventory(next); // sofort sichtbar
+    scheduleInventorySave(next); // gebündelt speichern
+  }
+
+  async function deleteProduct(id) {
+    cancelPendingInventorySave();
+    await persist(KEYS.inventory, inventory.filter((p) => p.id !== id), setInventory);
+  }
+
+  async function exportInventoryExcel() {
+    setInventoryBusy(true);
+    setInventoryError("");
+    try {
+      const XLSX = await import("xlsx");
+      // Nach Gruppe, dann nach Name — so ist die Excel-Datei direkt sortiert
+      // und lässt sich ohne Nacharbeit lesen.
+      const rows = [...sortedInventory]
+        .sort(
+          (a, b) =>
+            productGroup(a).localeCompare(productGroup(b), "de-CH", { sensitivity: "base" }) ||
+            (a.name || "").localeCompare(b.name || "", "de-CH", { sensitivity: "base" })
+        )
+        .map((p) => ({
+          Produktgruppe: p.group || "",
+          Artikelnummer: p.articleNumber || "",
+          "Artikel-Name": p.name || "",
+          "Stückzahl verfügbar": Number(p.stock) || 0,
+          "Preis (CHF)": Number(p.price) || 0,
+        }));
+      const ws = XLSX.utils.json_to_sheet(rows, {
+        header: ["Produktgruppe", "Artikelnummer", "Artikel-Name", "Stückzahl verfügbar", "Preis (CHF)"],
+      });
+      ws["!cols"] = [{ wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 18 }, { wch: 14 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Inventar");
+      XLSX.writeFile(wb, `Inventar_${todayISO()}.xlsx`);
+    } catch (e) {
+      console.error("Inventar-Export fehlgeschlagen", e);
+      setInventoryError(`Export fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
+    } finally {
+      setInventoryBusy(false);
+    }
+  }
+
+  // Importiert eine Excel-Datei mit denselben Spalten wie der Export. Artikel
+  // mit bereits vorhandener Artikelnummer werden aktualisiert statt doppelt
+  // angelegt; alles andere kommt neu dazu. Bestehende Artikel, die in der Datei
+  // fehlen, bleiben erhalten — ein Import ergänzt, er ersetzt nicht.
+  async function importInventoryExcel(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setInventoryBusy(true);
+    setInventoryError("");
+    try {
+      const XLSX = await import("xlsx");
+      const data = new Uint8Array(await file.arrayBuffer());
+      const wb = XLSX.read(data, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      if (!sheet) throw new Error("Die Datei enthält kein Tabellenblatt.");
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      const pick = (row, ...names) => {
+        for (const n of names) {
+          const key = Object.keys(row).find((k) => k.trim().toLowerCase() === n.toLowerCase());
+          if (key !== undefined) return row[key];
+        }
+        return "";
+      };
+
+      const next = [...inventory];
+      let added = 0;
+      let updated = 0;
+      for (const row of rows) {
+        const name = String(pick(row, "Artikel-Name", "Artikelname", "Name")).trim();
+        const articleNumber = String(pick(row, "Artikelnummer", "Artikel-Nr.", "Nr.")).trim();
+        if (!name && !articleNumber) continue;
+        const stock = Number(pick(row, "Stückzahl verfügbar", "Stückzahl", "Bestand")) || 0;
+        const price = Number(pick(row, "Preis (CHF)", "Preis")) || 0;
+        // Ältere Exportdateien haben keine Gruppenspalte — dann bleibt die
+        // bisherige Gruppe des Artikels erhalten statt gelöscht zu werden.
+        const hasGroupColumn = Object.keys(row).some((k) =>
+          ["produktgruppe", "gruppe", "kategorie"].includes(k.trim().toLowerCase())
+        );
+        const group = String(pick(row, "Produktgruppe", "Gruppe", "Kategorie")).trim();
+        const idx = articleNumber
+          ? next.findIndex((p) => (p.articleNumber || "").toLowerCase() === articleNumber.toLowerCase())
+          : -1;
+        if (idx >= 0) {
+          next[idx] = {
+            ...next[idx],
+            name: name || next[idx].name,
+            group: hasGroupColumn ? group : next[idx].group || "",
+            stock,
+            price,
+          };
+          updated++;
+        } else {
+          next.push({ id: uid(), articleNumber, name, group, stock, price });
+          added++;
+        }
+      }
+      if (!added && !updated) {
+        throw new Error("Keine gültigen Zeilen gefunden (erwartet: Artikelnummer, Artikel-Name, Stückzahl verfügbar, Preis).");
+      }
+      const ok = await persist(KEYS.inventory, next, setInventory);
+      setInventoryError(
+        ok
+          ? ""
+          : "Import gelesen, aber Speichern fehlgeschlagen — bitte erneut versuchen."
+      );
+      if (ok) {
+        setSaveStatus(`Inventar importiert: ${added} neu, ${updated} aktualisiert`);
+        setTimeout(() => setSaveStatus(""), 4000);
+      }
+    } catch (err) {
+      console.error("Inventar-Import fehlgeschlagen", err);
+      setInventoryError(`Import fehlgeschlagen: ${err.message || "unbekannter Fehler"}`);
+    } finally {
+      setInventoryBusy(false);
+    }
+  }
+
   function updateItem(id, field, value) {
     setItems(items.map((it) => (it.id === id ? { ...it, [field]: value } : it)));
   }
 
   function addItem() {
-    setItems([...items, { id: uid(), description: "", amount: "" }]);
+    setItems([...items, emptyItem()]);
   }
 
   function removeItem(id) {
@@ -419,10 +757,40 @@ export default function ReceiptApp() {
     setItems(items.filter((it) => it.id !== id));
   }
 
+  // Wechselt eine Position zwischen Dienstleistung und Produkt. Beim Wechsel
+  // zurück auf Dienstleistung wird die Artikelnummer entfernt — sie gehört zu
+  // einem Inventar-Artikel und wäre sonst eine Karteileiche auf der Rechnung.
+  function setItemKind(id, kind) {
+    setItems(
+      items.map((it) =>
+        it.id === id ? { ...it, kind, ...(kind === "service" ? { articleNumber: "" } : {}) } : it
+      )
+    );
+  }
+
+  // Übernimmt einen Inventar-Artikel in die Position: Name, Listpreis und
+  // Artikelnummer. Der Rabatt der Position bleibt bestehen.
+  function pickInventoryItem(id, productId) {
+    const p = inventory.find((x) => x.id === productId);
+    setItems(
+      items.map((it) =>
+        it.id === id
+          ? p
+            ? { ...it, description: p.name || "", amount: String(p.price ?? ""), articleNumber: p.articleNumber || "" }
+            : { ...it, articleNumber: "" }
+          : it
+      )
+    );
+  }
+
   const VAT_RATE = 0.081; // Normalsatz Schweiz für Dienstleistungen, Stand 2026
 
-  const enteredSum = items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+  // Summiert die Positionen NACH Rabatt — der eingegebene Betrag ist der
+  // Listpreis, verrechnet wird der reduzierte Betrag.
+  const enteredSum = items.reduce((sum, it) => sum + itemLineTotal(it), 0);
   const total = round2(enteredSum);
+  const discountTotal = round2(items.reduce((sum, it) => sum + itemDiscountAmount(it), 0));
+  const listTotal = round2(items.reduce((sum, it) => sum + itemListPrice(it), 0));
   const netTotal = vatEnabled ? round2(total / (1 + VAT_RATE)) : total;
   const vatAmount = vatEnabled ? round2(total - netTotal) : 0;
 
@@ -430,7 +798,7 @@ export default function ReceiptApp() {
     setSelectedCustomerId("");
     setManualCustomer(emptyPerson);
     setDate(todayISO());
-    setItems([{ id: uid(), description: "", amount: "" }]);
+    setItems([emptyItem()]);
     setNote("");
     setVatEnabled(false);
     setQrBillEnabled(false);
@@ -793,6 +1161,7 @@ export default function ReceiptApp() {
             </div>
             <NavItem icon={FileText} label="Neue Quittung" active={tab === "new"} onClick={() => setTab("new")} />
             <NavItem icon={Users} label="Kunden" active={tab === "customers"} onClick={() => setTab("customers")} />
+            <NavItem icon={Package} label="Inventar" active={tab === "inventory"} onClick={() => setTab("inventory")} />
             <NavItem icon={Building2} label="Firma" active={tab === "company"} onClick={() => setTab("company")} />
             <NavItem icon={History} label="Verlauf" active={tab === "history"} onClick={() => setTab("history")} />
             <NavItem icon={Wallet} label="Buchhaltung" active={tab === "accounting"} onClick={() => setTab("accounting")} />
@@ -930,41 +1299,124 @@ export default function ReceiptApp() {
                 </FieldGroup>
 
                 <FieldGroup label="Leistungen">
-                  <div style={{ display: "grid", gap: 8 }}>
-                    {items.map((it, idx) => (
-                      <div key={it.id} style={styles.itemRow}>
-                        <input
-                          placeholder="Beschreibung"
-                          value={it.description}
-                          onChange={(e) => updateItem(it.id, "description", e.target.value)}
-                          style={{ flex: 1 }}
-                        />
-                        <div style={styles.amountWrap}>
-                          <span className="mono" style={styles.chfLabel}>CHF</span>
-                          <input
-                            placeholder="0.00"
-                            type="number"
-                            step="0.01"
-                            value={it.amount}
-                            onChange={(e) => updateItem(it.id, "amount", e.target.value)}
-                            className="mono"
-                            style={{ width: 90, textAlign: "right" }}
-                          />
+                  <div style={{ display: "grid", gap: 14 }}>
+                    {items.map((it) => {
+                      const kind = itemKind(it);
+                      const disc = itemDiscountPercent(it);
+                      return (
+                        <div key={it.id} style={styles.itemCard}>
+                          <div style={styles.itemRow}>
+                            <KindToggle
+                              kind={kind}
+                              onChange={(k) => setItemKind(it.id, k)}
+                            />
+                            <input
+                              placeholder="Beschreibung"
+                              value={it.description}
+                              onChange={(e) => updateItem(it.id, "description", e.target.value)}
+                              style={{ flex: 1, minWidth: 120 }}
+                            />
+                            <div style={styles.amountWrap}>
+                              <span className="mono" style={styles.chfLabel}>CHF</span>
+                              <input
+                                placeholder="0.00"
+                                type="number"
+                                step="0.01"
+                                value={it.amount}
+                                onChange={(e) => updateItem(it.id, "amount", e.target.value)}
+                                className="mono"
+                                style={{ width: 90, textAlign: "right" }}
+                                title={kind === "product" ? "Listpreis" : "Preis"}
+                              />
+                            </div>
+                            <button
+                              onClick={() => removeItem(it.id)}
+                              style={styles.iconBtn}
+                              disabled={items.length === 1}
+                              aria-label="Position entfernen"
+                            >
+                              <Trash2 size={14} color={items.length === 1 ? "#CBCED2" : "#70747C"} />
+                            </button>
+                          </div>
+
+                          <div style={styles.itemMetaRow}>
+                            {kind === "product" && (
+                              <label style={styles.itemMetaField}>
+                                <span style={styles.itemMetaLabel}>Artikel</span>
+                                <select
+                                  value={
+                                    sortedInventory.find((p) => p.articleNumber && p.articleNumber === it.articleNumber)?.id || ""
+                                  }
+                                  onChange={(e) => pickInventoryItem(it.id, e.target.value)}
+                                  style={{ ...styles.select, width: "auto", minWidth: 190 }}
+                                  disabled={sortedInventory.length === 0}
+                                >
+                                  <option value="">
+                                    {sortedInventory.length === 0 ? "— Inventar ist leer —" : "— aus Inventar wählen —"}
+                                  </option>
+                                  {/* Nach Produktgruppe gebündelt, damit die
+                                      Auswahl auch bei vielen Artikeln
+                                      überschaubar bleibt. */}
+                                  {inventoryByGroup.map(({ group, items: groupItems }) => (
+                                    <optgroup key={group} label={group}>
+                                      {groupItems.map((p) => (
+                                        <option key={p.id} value={p.id}>
+                                          {p.articleNumber ? `${p.articleNumber} · ` : ""}
+                                          {p.name} — CHF {chf(p.price)}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  ))}
+                                </select>
+                              </label>
+                            )}
+
+                            <label style={styles.itemMetaField}>
+                              <span style={styles.itemMetaLabel}>Rabatt</span>
+                              <span style={styles.discountWrap}>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="1"
+                                  placeholder="0"
+                                  value={it.discountPercent ?? ""}
+                                  onChange={(e) => updateItem(it.id, "discountPercent", e.target.value)}
+                                  className="mono"
+                                  style={{ width: 62, textAlign: "right" }}
+                                />
+                                <span style={styles.chfLabel}>%</span>
+                              </span>
+                            </label>
+
+                            {disc > 0 && itemListPrice(it) > 0 && (
+                              <span style={styles.itemLineSummary}>
+                                <span style={styles.strikePrice} className="mono">CHF {chf(itemListPrice(it))}</span>
+                                <span style={styles.discountBadge}>−{formatPercent(disc)} %</span>
+                                <span className="mono" style={{ fontWeight: 700 }}>CHF {chf(itemLineTotal(it))}</span>
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <button
-                          onClick={() => removeItem(it.id)}
-                          style={styles.iconBtn}
-                          disabled={items.length === 1}
-                          aria-label="Position entfernen"
-                        >
-                          <Trash2 size={14} color={items.length === 1 ? "#CBCED2" : "#70747C"} />
-                        </button>
-                      </div>
-                    ))}
+                      );
+                    })}
                     <button onClick={addItem} style={styles.dashedBtn}>
                       <Plus size={14} /> Position hinzufügen
                     </button>
                   </div>
+
+                  {discountTotal > 0 && (
+                    <div style={styles.discountSummary}>
+                      <div style={styles.vatBreakdownRow}>
+                        <span>Zwischensumme (Listpreise)</span>
+                        <span className="mono">CHF {chf(listTotal)}</span>
+                      </div>
+                      <div style={styles.vatBreakdownRow}>
+                        <span>Rabatt</span>
+                        <span className="mono" style={{ color: "#1D7A3C" }}>− CHF {chf(discountTotal)}</span>
+                      </div>
+                    </div>
+                  )}
 
                   <button
                     onClick={() => setVatEnabled(!vatEnabled)}
@@ -1145,15 +1597,259 @@ export default function ReceiptApp() {
               </div>
             )}
 
+            {tab === "inventory" && (
+              <div style={styles.panel}>
+                <Eyebrow>03 — Inventar</Eyebrow>
+                <h1 style={styles.h1}>Inventar</h1>
+                <div style={{ fontSize: 13, color: "#5B5F66", marginBottom: 20, maxWidth: 520 }}>
+                  Artikel, die sich beim Erstellen einer Rechnung als Position „Produkt"
+                  auswählen lassen. Die Liste ist alphabetisch sortiert.
+                </div>
+
+                <FieldGroup label="Neuen Artikel erfassen">
+                  <div style={styles.inventoryForm}>
+                    <input
+                      placeholder="Artikelnummer"
+                      value={newProduct.articleNumber}
+                      onChange={(e) => setNewProduct({ ...newProduct, articleNumber: e.target.value })}
+                      style={{ width: 130 }}
+                    />
+                    <input
+                      placeholder="Artikel-Name"
+                      value={newProduct.name}
+                      onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+                      style={{ flex: 1, minWidth: 160 }}
+                    />
+                    {/* Freies Feld mit Vorschlägen: bestehende Gruppen lassen
+                        sich per Klick übernehmen, neue einfach eintippen. */}
+                    <input
+                      placeholder="Produktgruppe"
+                      list="produktgruppen"
+                      value={newProduct.group}
+                      onChange={(e) => setNewProduct({ ...newProduct, group: e.target.value })}
+                      style={{ width: 150 }}
+                    />
+                    <input
+                      placeholder="Stück"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={newProduct.stock}
+                      onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })}
+                      className="mono"
+                      style={{ width: 80, textAlign: "right" }}
+                    />
+                    <div style={styles.amountWrap}>
+                      <span className="mono" style={styles.chfLabel}>CHF</span>
+                      <input
+                        placeholder="0.00"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={newProduct.price}
+                        onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
+                        className="mono"
+                        style={{ width: 90, textAlign: "right" }}
+                      />
+                    </div>
+                    <button
+                      onClick={addProduct}
+                      disabled={!newProduct.name.trim()}
+                      style={{ ...styles.secondaryBtn, opacity: newProduct.name.trim() ? 1 : 0.4 }}
+                    >
+                      <Plus size={14} /> Hinzufügen
+                    </button>
+                  </div>
+                </FieldGroup>
+
+                <FieldGroup label="Excel">
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <button
+                      onClick={exportInventoryExcel}
+                      style={styles.secondaryBtn}
+                      disabled={inventoryBusy || inventory.length === 0}
+                    >
+                      <Download size={14} /> Inventar exportieren
+                    </button>
+                    <label style={{ ...styles.secondaryBtn, opacity: inventoryBusy ? 0.6 : 1 }}>
+                      <Upload size={14} /> Aus Excel importieren
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        onChange={importInventoryExcel}
+                        disabled={inventoryBusy}
+                        style={{ display: "none" }}
+                      />
+                    </label>
+                  </div>
+                  <div style={styles.helpToggleRow}>
+                    <button
+                      type="button"
+                      onClick={toggleImportHelp}
+                      style={styles.linkBtn}
+                      aria-expanded={showImportHelp}
+                      aria-controls="import-anleitung"
+                    >
+                      {showImportHelp ? "Anleitung ausblenden" : "Anleitung anzeigen"}
+                    </button>
+                    {!showImportHelp && (
+                      <span style={{ fontSize: 12, color: "#8B8F96" }}>
+                        Spalten: Produktgruppe · Artikelnummer · Artikel-Name · Stückzahl verfügbar · Preis (CHF)
+                      </span>
+                    )}
+                  </div>
+
+                  {showImportHelp && (
+                    <div
+                      id="import-anleitung"
+                      style={{ ...styles.hint, background: "#F1F1EF", color: "#5B5F66", marginTop: 8 }}
+                    >
+                      So muss die Datei aufgebaut sein — Spaltentitel in Zeile 1, ab Zeile 2 die Artikel:
+                      <ExcelLayoutHint />
+                      Beim Import werden Artikel mit bereits vorhandener Artikelnummer aktualisiert,
+                      alle anderen neu angelegt — bestehende Artikel gehen nicht verloren.
+                      Fehlt die Spalte „Produktgruppe" (ältere Datei), bleibt die bisherige Gruppe erhalten.
+                    </div>
+                  )}
+                  {inventoryError && <div style={styles.hint}>{inventoryError}</div>}
+                  {saveStatus && <div style={styles.savedMsg}>{saveStatus}</div>}
+                </FieldGroup>
+
+                <div style={{ marginTop: 8 }}>
+                  {/* Vorschlagsliste für alle Gruppenfelder */}
+                  <datalist id="produktgruppen">
+                    {inventoryGroups
+                      .filter((g) => g !== UNGROUPED_LABEL)
+                      .map((g) => (
+                        <option key={g} value={g} />
+                      ))}
+                  </datalist>
+
+                  {inventory.length === 0 ? (
+                    <EmptyState text="Noch keine Artikel im Inventar." />
+                  ) : (
+                    <>
+                      <div style={styles.invFilterRow}>
+                        <input
+                          placeholder="Suchen (Name, Artikelnummer, Gruppe)"
+                          value={inventorySearch}
+                          onChange={(e) => setInventorySearch(e.target.value)}
+                          style={{ flex: 1, minWidth: 200 }}
+                          aria-label="Inventar durchsuchen"
+                        />
+                        <select
+                          value={inventoryGroupFilter}
+                          onChange={(e) => setInventoryGroupFilter(e.target.value)}
+                          style={{ ...styles.select, width: "auto", minWidth: 170 }}
+                          aria-label="Nach Produktgruppe filtern"
+                        >
+                          <option value="">Alle Gruppen ({inventory.length})</option>
+                          {inventoryGroups.map((g) => (
+                            <option key={g} value={g}>
+                              {g} ({inventory.filter((p) => productGroup(p) === g).length})
+                            </option>
+                          ))}
+                        </select>
+                        {(inventorySearch || inventoryGroupFilter) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInventorySearch("");
+                              setInventoryGroupFilter("");
+                            }}
+                            style={styles.linkBtn}
+                          >
+                            Filter zurücksetzen
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={styles.invHeaderRow}>
+                        <span style={{ width: 120 }}>Artikelnr.</span>
+                        <span style={{ flex: 1 }}>Artikel-Name</span>
+                        <span style={{ width: 150 }}>Gruppe</span>
+                        <span style={{ width: 80, textAlign: "right" }}>Stück</span>
+                        <span style={{ width: 110, textAlign: "right" }}>Preis</span>
+                        <span style={{ width: 34 }} />
+                      </div>
+                      {visibleInventory.length === 0 && (
+                        <div style={{ ...styles.empty, padding: "16px 0" }}>
+                          Kein Artikel passt zu Suche/Filter.
+                        </div>
+                      )}
+                      {visibleInventory.map((p) => (
+                        <div key={p.id} style={styles.invRow}>
+                          <input
+                            value={p.articleNumber || ""}
+                            onChange={(e) => updateProduct(p.id, "articleNumber", e.target.value)}
+                            className="mono"
+                            style={{ width: 120 }}
+                            aria-label="Artikelnummer"
+                          />
+                          <input
+                            value={p.name || ""}
+                            onChange={(e) => updateProduct(p.id, "name", e.target.value)}
+                            style={{ flex: 1, minWidth: 140 }}
+                            aria-label="Artikel-Name"
+                          />
+                          <input
+                            value={p.group || ""}
+                            list="produktgruppen"
+                            placeholder="—"
+                            onChange={(e) => updateProduct(p.id, "group", e.target.value)}
+                            style={{ width: 150 }}
+                            aria-label="Produktgruppe"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={p.stock ?? 0}
+                            onChange={(e) => updateProduct(p.id, "stock", e.target.value)}
+                            className="mono"
+                            style={{ width: 80, textAlign: "right" }}
+                            aria-label="Stückzahl verfügbar"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={p.price ?? 0}
+                            onChange={(e) => updateProduct(p.id, "price", e.target.value)}
+                            className="mono"
+                            style={{ width: 110, textAlign: "right" }}
+                            aria-label="Preis"
+                          />
+                          <ConfirmDeleteButton label="" onConfirm={() => deleteProduct(p.id)} />
+                        </div>
+                      ))}
+                      <div style={styles.invFooter}>
+                        {visibleInventory.length === inventory.length
+                          ? `${inventory.length} Artikel`
+                          : `${visibleInventory.length} von ${inventory.length} Artikeln`}{" "}
+                        · {inventoryGroups.length} Gruppe{inventoryGroups.length === 1 ? "" : "n"} · Lagerwert{" "}
+                        <span className="mono">
+                          CHF{" "}
+                          {chf(
+                            visibleInventory.reduce((s, p) => s + (Number(p.price) || 0) * (Number(p.stock) || 0), 0)
+                          )}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             {tab === "company" && (
               <div style={styles.panel}>
-                <Eyebrow>03 — Firma</Eyebrow>
+                <Eyebrow>04 — Firma</Eyebrow>
                 <h1 style={styles.h1}>Firmendaten</h1>
 
                 <div style={{ marginBottom: 28, maxWidth: 420 }}>
                   <div style={styles.fieldLabel}>Firmenlogo</div>
                   <div style={{ fontSize: 12, color: "#8B8F96", marginBottom: 12 }}>
-                    Erscheint oben links auf Quittung/Rechnung (PDF und Druck). Ein Bild mit
+                    Erscheint im Kopf von Quittung/Rechnung (PDF und Druck). Ein Bild mit
                     wenig Rand wirkt am besten, PNG mit transparentem Hintergrund wird unterstützt.
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -1181,6 +1877,62 @@ export default function ReceiptApp() {
                     </div>
                   </div>
                   {logoError && <div style={styles.hint}>{logoError}</div>}
+
+                  {companyDraft.logoDataUrl && (
+                    <div style={styles.logoOptions}>
+                      <div style={styles.logoOptionRow}>
+                        <span style={styles.itemMetaLabel}>Anordnung</span>
+                        <OptionGroup
+                          value={logoLayoutOf(companyDraft)}
+                          options={[
+                            ["inline", "Neben dem Text"],
+                            ["above", "Über dem Text"],
+                          ]}
+                          onChange={(v) => setCompanyDraft({ ...companyDraft, logoLayout: v })}
+                          ariaLabel="Logo-Anordnung"
+                        />
+                      </div>
+                      {/* Ausrichtung ist nur sinnvoll, wenn das Logo eine eigene
+                          Zeile hat — neben dem Text steht es immer links. */}
+                      {logoLayoutOf(companyDraft) === "above" && (
+                        <div style={styles.logoOptionRow}>
+                          <span style={styles.itemMetaLabel}>Ausrichtung</span>
+                          <OptionGroup
+                            value={logoAlignOf(companyDraft)}
+                            options={[
+                              ["left", "Links"],
+                              ["center", "Mittig"],
+                              ["right", "Rechts"],
+                            ]}
+                            onChange={(v) => setCompanyDraft({ ...companyDraft, logoPosition: v })}
+                            ariaLabel="Logo-Ausrichtung"
+                          />
+                        </div>
+                      )}
+                      <div style={styles.logoOptionRow}>
+                        <span style={styles.itemMetaLabel}>Grösse</span>
+                        <OptionGroup
+                          value={companyDraft.logoSize || "medium"}
+                          options={[
+                            ["small", "Klein"],
+                            ["medium", "Mittel"],
+                            ["large", "Gross"],
+                          ]}
+                          onChange={(v) => setCompanyDraft({ ...companyDraft, logoSize: v })}
+                          ariaLabel="Logo-Grösse"
+                        />
+                      </div>
+                      <LogoLayoutPreview
+                        layout={logoLayoutOf(companyDraft)}
+                        align={logoAlignOf(companyDraft)}
+                        size={companyDraft.logoSize || "medium"}
+                        logoDataUrl={companyDraft.logoDataUrl}
+                      />
+                      <button onClick={saveCompany} style={{ ...styles.secondaryBtn, marginTop: 4 }}>
+                        <Check size={14} /> Speichern
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: "grid", gap: 8, maxWidth: 420 }}>
@@ -1318,7 +2070,7 @@ export default function ReceiptApp() {
 
             {tab === "history" && (
               <div style={styles.panel}>
-                <Eyebrow>04 — Verlauf</Eyebrow>
+                <Eyebrow>05 — Verlauf</Eyebrow>
                 <h1 style={styles.h1}>Bisherige Quittungen</h1>
                 {receipts.length === 0 ? (
                   <EmptyState text="Noch keine Quittungen erstellt." />
@@ -1357,7 +2109,7 @@ export default function ReceiptApp() {
 
             {tab === "backup" && (
               <div style={styles.panel}>
-                <Eyebrow>06 — Backup</Eyebrow>
+                <Eyebrow>07 — Backup</Eyebrow>
                 <h1 style={styles.h1}>Backup & Datenübertragung</h1>
                 <div style={{ fontSize: 13, color: "#5B5F66", marginBottom: 24, maxWidth: 480 }}>
                   Exportiert Firma, alle Kunden und alle Quittungen/Rechnungen als eine
@@ -1514,29 +2266,54 @@ export default function ReceiptApp() {
 }
 
 function ReceiptDocument({ receipt }) {
+  const company = receipt.company || {};
+  const logoLayout = logoLayoutOf(company);
+  const logoAlign = logoAlignOf(company);
+  const logoHeights = { small: 26, medium: 38, large: 52 };
+  const logoStyle = { ...styles.docLogo, height: logoHeights[company.logoSize] || logoHeights.medium };
+
+  const companyBlock = (
+    <div>
+      <div style={styles.docCompanyName}>{company.name || "Firma"}</div>
+      <div style={styles.docMuted}>{company.address}</div>
+      <div style={styles.docMuted}>{company.zipCity}</div>
+      <div style={styles.docMuted}>{company.email}</div>
+      <div style={styles.docMuted}>{company.phone}</div>
+      {company.vatNumber && <div style={styles.docMuted}>MWST-Nr. {company.vatNumber}</div>}
+    </div>
+  );
+  const titleBlock = (
+    <div style={{ textAlign: "right" }}>
+      <div style={styles.docTitle}>{receipt.qrBillEnabled ? "RECHNUNG" : "QUITTUNG"}</div>
+      <div className="mono" style={styles.docNumber}>Nr. {receipt.number}</div>
+      <div className="mono" style={styles.docMuted}>{formatDateDE(receipt.date)}</div>
+    </div>
+  );
+
   return (
     <div className="print-area" style={styles.document}>
+      {/* Bei mittiger/rechter Position steht das Logo auf einer eigenen Zeile
+          über dem Kopf, sonst käme es mit dem Titelblock rechts ins Gehege. */}
+      {company.logoDataUrl && logoLayout === "above" && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent:
+              logoAlign === "center" ? "center" : logoAlign === "right" ? "flex-end" : "flex-start",
+            marginBottom: 26,
+          }}
+        >
+          <img src={company.logoDataUrl} alt="" style={logoStyle} />
+        </div>
+      )}
       <div style={styles.docHeader}>
         <div style={styles.docHeaderLeft}>
-          {receipt.company.logoDataUrl && (
-            <img src={receipt.company.logoDataUrl} alt="" style={styles.docLogo} />
+          {company.logoDataUrl && logoLayout === "inline" && (
+            <img src={company.logoDataUrl} alt="" style={logoStyle} />
           )}
-          <div>
-            <div style={styles.docCompanyName}>{receipt.company.name || "Firma"}</div>
-            <div style={styles.docMuted}>{receipt.company.address}</div>
-            <div style={styles.docMuted}>{receipt.company.zipCity}</div>
-            <div style={styles.docMuted}>{receipt.company.email}</div>
-            <div style={styles.docMuted}>{receipt.company.phone}</div>
-            {receipt.company.vatNumber && (
-              <div style={styles.docMuted}>MWST-Nr. {receipt.company.vatNumber}</div>
-            )}
-          </div>
+          {companyBlock}
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={styles.docTitle}>{receipt.qrBillEnabled ? "RECHNUNG" : "QUITTUNG"}</div>
-          <div className="mono" style={styles.docNumber}>Nr. {receipt.number}</div>
-          <div className="mono" style={styles.docMuted}>{formatDateDE(receipt.date)}</div>
-        </div>
+        {titleBlock}
       </div>
 
       <div style={styles.docRule} />
@@ -1554,14 +2331,33 @@ function ReceiptDocument({ receipt }) {
         <div style={styles.docLabel}>Leistung</div>
         <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 6 }}>
           <tbody>
-            {receipt.items.map((it) => (
-              <tr key={it.id} style={{ borderBottom: "1px solid #EDEEEF" }}>
-                <td style={{ padding: "6px 0", fontSize: 13 }}>{it.description}</td>
-                <td className="mono" style={{ padding: "6px 0", fontSize: 13, textAlign: "right" }}>
-                  CHF {chf(it.amount)}
-                </td>
-              </tr>
-            ))}
+            {receipt.items.map((it) => {
+              const disc = itemDiscountPercent(it);
+              const isProduct = itemKind(it) === "product";
+              return (
+                <tr key={it.id} style={{ borderBottom: "1px solid #EDEEEF" }}>
+                  <td style={{ padding: "6px 0", fontSize: 13 }}>
+                    {it.description}
+                    {isProduct && it.articleNumber && (
+                      <span className="mono" style={styles.docArticleNr}> · {it.articleNumber}</span>
+                    )}
+                  </td>
+                  {/* Beim Produkt zusätzlich der durchgestrichene Listpreis —
+                      bei der Dienstleistung nur Rabatt und neuer Preis. */}
+                  <td className="mono" style={styles.docListPriceCell}>
+                    {disc > 0 && isProduct ? (
+                      <span style={styles.docStrike}>CHF {chf(itemListPrice(it))}</span>
+                    ) : null}
+                  </td>
+                  <td className="mono" style={styles.docDiscountCell}>
+                    {disc > 0 ? `Rabatt ${formatPercent(disc)} %` : ""}
+                  </td>
+                  <td className="mono" style={{ padding: "6px 0", fontSize: 13, textAlign: "right", whiteSpace: "nowrap" }}>
+                    CHF {chf(itemLineTotal(it))}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {receipt.vatEnabled ? (
@@ -1610,6 +2406,47 @@ function ReceiptDocument({ receipt }) {
           <span style={{ fontStyle: "italic" }}>{receipt.company.name}</span>
         </div>
       </div>
+
+      <DocumentFooter company={company} />
+    </div>
+  );
+}
+
+// Fusszeile mit den Firmenangaben, die auf ein Geschäftsdokument gehören:
+// vollständige Adresse, Kontakt, MWST-Nummer und Bankverbindung. Steht am
+// Seitenfuss, damit der Kunde alles für Rückfragen und Zahlung beisammen hat.
+function companyFooterColumns(company) {
+  const qr = company.qrBill || {};
+  const addressLines = [company.name, company.address, company.zipCity].filter(Boolean);
+  const contactLines = [
+    company.email ? `E-Mail: ${company.email}` : "",
+    company.phone ? `Telefon: ${company.phone}` : "",
+    company.vatNumber ? `MWST-Nr. ${company.vatNumber}` : "",
+  ].filter(Boolean);
+  const bankLines = [
+    qr.iban ? `IBAN: ${formatIbanDisplay(qr.iban)}` : "",
+    qr.name && qr.name !== company.name ? `Kontoinhaber: ${qr.name}` : "",
+  ].filter(Boolean);
+  return [
+    { title: "Adresse", lines: addressLines },
+    { title: "Kontakt", lines: contactLines },
+    { title: "Bankverbindung", lines: bankLines },
+  ].filter((c) => c.lines.length > 0);
+}
+
+function DocumentFooter({ company }) {
+  const columns = companyFooterColumns(company || {});
+  if (columns.length === 0) return null;
+  return (
+    <div style={styles.docFooter}>
+      {columns.map((col) => (
+        <div key={col.title} style={styles.docFooterCol}>
+          <div style={styles.docFooterTitle}>{col.title}</div>
+          {col.lines.map((l, i) => (
+            <div key={i} style={styles.docFooterLine}>{l}</div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1634,6 +2471,159 @@ function NavItem({ icon: Icon, label, active, onClick }) {
 
 function Eyebrow({ children }) {
   return <div style={styles.eyebrow}>{children}</div>;
+}
+
+// Umschalter Dienstleistung/Produkt für eine einzelne Rechnungsposition.
+// Bewusst zwei sichtbare Schaltflächen statt eines Ein/Aus-Schalters: beide
+// Zustände sind gleichwertig, ein Schalter würde einen davon als "aus"
+// darstellen.
+function KindToggle({ kind, onChange }) {
+  const opts = [
+    ["service", "Dienstleistung"],
+    ["product", "Produkt"],
+  ];
+  return (
+    <div style={styles.kindToggle} role="group" aria-label="Art der Position">
+      {opts.map(([value, label]) => {
+        const active = kind === value;
+        return (
+          <button
+            key={value}
+            type="button"
+            onClick={() => onChange(value)}
+            aria-pressed={active}
+            style={{ ...styles.kindBtn, ...(active ? styles.kindBtnActive : {}) }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Miniatur eines Tabellenblatts: zeigt auf einen Blick, in welche Spalte was
+// gehört. Bewusst mit Spaltenbuchstaben und Zeilennummern wie in Excel — so
+// lässt sich die eigene Datei direkt danebenlegen und vergleichen.
+function ExcelLayoutHint() {
+  const columns = [
+    { letter: "A", header: "Produktgruppe", values: ["Netzwerk", "Mobiliar"], width: 100 },
+    { letter: "B", header: "Artikelnummer", values: ["ART-001", "ART-010"], width: 96, mono: true },
+    { letter: "C", header: "Artikel-Name", values: ["Router AX55", "Bürostuhl"], width: 112 },
+    { letter: "D", header: "Stückzahl verfügbar", values: ["12", "3"], width: 92, numeric: true },
+    { letter: "E", header: "Preis (CHF)", values: ["200.00", "450.00"], width: 78, numeric: true },
+  ];
+
+  return (
+    <>
+    <div style={styles.sheetScroll}>
+      <div style={styles.sheet} role="img" aria-label="Aufbau der Excel-Datei: Zeile 1 enthält die Spaltentitel Produktgruppe, Artikelnummer, Artikel-Name, Stückzahl verfügbar und Preis (CHF); ab Zeile 2 folgen die Artikel.">
+        {/* Spaltenbuchstaben */}
+        <div style={styles.sheetRow}>
+          <div style={{ ...styles.sheetCorner }} />
+          {columns.map((c) => (
+            <div key={c.letter} style={{ ...styles.sheetColHead, width: c.width }}>
+              {c.letter}
+            </div>
+          ))}
+        </div>
+
+        {/* Zeile 1: Spaltentitel */}
+        <div style={styles.sheetRow}>
+          <div style={styles.sheetRowHead}>1</div>
+          {columns.map((c) => (
+            <div key={c.letter} style={{ ...styles.sheetCell, ...styles.sheetHeaderCell, width: c.width }}>
+              {c.header}
+            </div>
+          ))}
+        </div>
+
+        {/* Beispieldatensätze */}
+        {[0, 1].map((i) => (
+          <div key={i} style={styles.sheetRow}>
+            <div style={styles.sheetRowHead}>{i + 2}</div>
+            {columns.map((c) => (
+              <div
+                key={c.letter}
+                style={{
+                  ...styles.sheetCell,
+                  width: c.width,
+                  textAlign: c.numeric ? "right" : "left",
+                  fontFamily: c.mono || c.numeric ? "'IBM Plex Mono', monospace" : undefined,
+                }}
+              >
+                {c.values[i]}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+    <div style={styles.sheetNote}>Beispielzeilen — die Spaltentitel müssen exakt so heissen.</div>
+    </>
+  );
+}
+
+// Kleine Auswahlgruppe (wie KindToggle, aber für beliebig viele Optionen).
+function OptionGroup({ value, options, onChange, ariaLabel }) {
+  return (
+    <div style={styles.kindToggle} role="group" aria-label={ariaLabel}>
+      {options.map(([v, label]) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onChange(v)}
+          aria-pressed={value === v}
+          style={{ ...styles.kindBtn, ...(value === v ? styles.kindBtnActive : {}) }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Miniatur des PDF-Kopfs, damit die Wirkung von Position und Grösse sofort
+// sichtbar ist, ohne erst eine PDF erzeugen zu müssen.
+function LogoLayoutPreview({ layout, align, size, logoDataUrl }) {
+  const heights = { small: 14, medium: 20, large: 28 };
+  const h = heights[size] || heights.medium;
+  const justify = align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start";
+
+  // Firmenblock links, Titelblock rechts — wie im PDF.
+  const textBlocks = (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, width: "100%" }}>
+      <div style={{ display: "grid", gap: 3 }}>
+        <span style={styles.logoPreviewBarStrong} />
+        <span style={styles.logoPreviewBar} />
+        <span style={styles.logoPreviewBar} />
+      </div>
+      <div style={{ display: "grid", gap: 3, justifyItems: "end" }}>
+        <span style={{ ...styles.logoPreviewBarStrong, width: 44, background: "#E30613" }} />
+        <span style={{ ...styles.logoPreviewBar, width: 28 }} />
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={styles.logoLayoutPreview} aria-hidden="true">
+      {layout === "inline" ? (
+        // Logo steht neben dem Firmenblock (grösserer Abstand wie im PDF)
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 18, width: "100%" }}>
+          <img src={logoDataUrl} alt="" style={{ height: h, objectFit: "contain", flexShrink: 0 }} />
+          {textBlocks}
+        </div>
+      ) : (
+        // Logo steht auf eigener Zeile darüber
+        <div style={{ display: "grid", gap: 14, width: "100%" }}>
+          <div style={{ display: "flex", justifyContent: justify }}>
+            <img src={logoDataUrl} alt="" style={{ height: h, objectFit: "contain" }} />
+          </div>
+          {textBlocks}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function FieldGroup({ label, children }) {
@@ -1753,7 +2743,181 @@ const styles = {
   h1: { fontSize: 22, fontWeight: 700, margin: "0 0 28px 0" },
   fieldLabel: { fontSize: 12, fontWeight: 600, color: "#5B5F66", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.03em" },
   select: { width: "100%", padding: "8px 10px", border: "1px solid #DADDE1", fontSize: 13, background: "#fff" },
-  itemRow: { display: "flex", alignItems: "center", gap: 8 },
+  itemRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  itemCard: {
+    border: "1px solid #EDEEEF",
+    borderLeft: "2px solid #E4E5E7",
+    padding: "10px 12px",
+    display: "grid",
+    gap: 8,
+    background: "#fff",
+  },
+  itemMetaRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 14,
+    flexWrap: "wrap",
+  },
+  itemMetaField: { display: "flex", alignItems: "center", gap: 6 },
+  itemMetaLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#8B8F96",
+    textTransform: "uppercase",
+    letterSpacing: "0.03em",
+  },
+  discountWrap: { display: "flex", alignItems: "center", gap: 4 },
+  itemLineSummary: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginLeft: "auto",
+    fontSize: 12,
+  },
+  strikePrice: { textDecoration: "line-through", color: "#8B8F96" },
+  discountBadge: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: "#1D7A3C",
+    background: "#EAF6EE",
+    padding: "2px 6px",
+  },
+  discountSummary: { marginTop: 12 },
+  inventoryForm: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
+  invHeaderRow: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    padding: "0 0 6px",
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#8B8F96",
+    textTransform: "uppercase",
+    letterSpacing: "0.03em",
+    borderBottom: "1px solid #E4E5E7",
+  },
+  invRow: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    padding: "6px 0",
+    borderBottom: "1px solid #F1F1EF",
+  },
+  invFooter: { marginTop: 12, fontSize: 12, color: "#5B5F66" },
+  // Miniatur-Tabellenblatt in der Import-Anleitung
+  sheetScroll: { overflowX: "auto", margin: "10px 0 4px" },
+  sheet: {
+    display: "inline-block",
+    border: "1px solid #B7BCC2",
+    background: "#fff",
+    fontSize: 11,
+    lineHeight: 1.2,
+    userSelect: "none",
+  },
+  sheetRow: { display: "flex" },
+  sheetCorner: {
+    width: 26,
+    height: 20,
+    background: "#E8EAED",
+    borderRight: "1px solid #B7BCC2",
+    borderBottom: "1px solid #B7BCC2",
+    flexShrink: 0,
+  },
+  sheetColHead: {
+    height: 20,
+    background: "#E8EAED",
+    borderRight: "1px solid #B7BCC2",
+    borderBottom: "1px solid #B7BCC2",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontWeight: 600,
+    color: "#5B5F66",
+    flexShrink: 0,
+  },
+  sheetRowHead: {
+    width: 26,
+    background: "#E8EAED",
+    borderRight: "1px solid #B7BCC2",
+    borderBottom: "1px solid #DDE1E5",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontWeight: 600,
+    color: "#5B5F66",
+    flexShrink: 0,
+  },
+  sheetCell: {
+    padding: "5px 7px",
+    borderRight: "1px solid #DDE1E5",
+    borderBottom: "1px solid #DDE1E5",
+    color: "#16181D",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    flexShrink: 0,
+  },
+  sheetHeaderCell: {
+    fontWeight: 700,
+    background: "#F7F8F9",
+    // Umbrechen statt abschneiden: in einer Anleitung muss der Spaltentitel
+    // vollständig lesbar sein, sonst rät man beim Nachbauen.
+    whiteSpace: "normal",
+    lineHeight: 1.2,
+  },
+  sheetNote: { fontSize: 11, color: "#8B8F96", fontStyle: "italic", margin: "2px 0 10px" },
+  helpToggleRow: { display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" },
+  invFilterRow: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    flexWrap: "wrap",
+    marginBottom: 14,
+  },
+  logoOptions: { display: "grid", gap: 10, marginTop: 16 },
+  logoOptionRow: { display: "flex", alignItems: "center", gap: 10 },
+  logoLayoutPreview: {
+    border: "1px solid #E4E5E7",
+    background: "#fff",
+    padding: 12,
+    display: "flex",
+    marginTop: 4,
+  },
+  logoPreviewBar: { display: "block", width: 60, height: 4, background: "#DADDE1" },
+  logoPreviewBarStrong: { display: "block", width: 74, height: 6, background: "#9AA0A6" },
+  docArticleNr: { fontSize: 11, color: "#8B8F96" },
+  docListPriceCell: { padding: "6px 8px", fontSize: 12, textAlign: "right", whiteSpace: "nowrap" },
+  docDiscountCell: { padding: "6px 8px", fontSize: 12, textAlign: "right", whiteSpace: "nowrap", color: "#1D7A3C" },
+  docStrike: { textDecoration: "line-through", color: "#8B8F96" },
+  docFooter: {
+    marginTop: 28,
+    paddingTop: 12,
+    borderTop: "1px solid #E4E5E7",
+    display: "flex",
+    gap: 24,
+    flexWrap: "wrap",
+  },
+  docFooterCol: { flex: "1 1 150px", minWidth: 140 },
+  docFooterTitle: {
+    fontSize: 8.5,
+    fontWeight: 700,
+    color: "#8B8F96",
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    marginBottom: 3,
+  },
+  docFooterLine: { fontSize: 10, color: "#70747C", lineHeight: 1.5 },
+  kindToggle: { display: "flex", border: "1px solid #DADDE1", flexShrink: 0 },
+  kindBtn: {
+    border: "none",
+    background: "transparent",
+    color: "#70747C",
+    fontSize: 11,
+    fontWeight: 600,
+    padding: "6px 10px",
+    cursor: "pointer",
+  },
+  kindBtnActive: { background: "#16181D", color: "#fff" },
   amountWrap: { display: "flex", alignItems: "center", gap: 4 },
   chfLabel: { fontSize: 11, color: "#8B8F96" },
   iconBtn: { border: "none", background: "transparent", cursor: "pointer", padding: 6, display: "flex" },
@@ -2001,7 +3165,8 @@ const styles = {
     padding: 40,
   },
   docHeader: { display: "flex", justifyContent: "space-between" },
-  docHeaderLeft: { display: "flex", alignItems: "flex-start", gap: 12 },
+  // gap passend zum PDF (dort mm(7) zwischen Logo und Firmenblock)
+  docHeaderLeft: { display: "flex", alignItems: "flex-start", gap: 20 },
   docLogo: { maxWidth: 90, maxHeight: 56, objectFit: "contain" },
   docCompanyName: { fontWeight: 700, fontSize: 15 },
   docMuted: { fontSize: 12, color: "#70747C" },

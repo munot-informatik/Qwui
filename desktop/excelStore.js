@@ -21,6 +21,17 @@ import { storeLogo, loadLogo } from "./logoCache.js";
 
 const SHEET_CUSTOMERS = "Kunden";
 const SHEET_RECEIPTS = "Zahlungen";
+const SHEET_INVENTORY = "Inventar";
+
+const INVENTORY_HEADERS = [
+  "ID",
+  "Artikelnummer",
+  "Artikel-Name",
+  "Produktgruppe",
+  "Stückzahl verfügbar",
+  "Preis (CHF)",
+];
+const INVENTORY_COLUMN_WIDTHS = [10, 18, 34, 22, 20, 14];
 
 const CUSTOMER_HEADERS = [
   "ID",
@@ -185,6 +196,7 @@ async function loadWorkbook() {
   }
   ensureSheet(wb, SHEET_CUSTOMERS, CUSTOMER_HEADERS, CUSTOMER_COLUMN_WIDTHS);
   ensureSheet(wb, SHEET_RECEIPTS, RECEIPT_HEADERS, RECEIPT_COLUMN_WIDTHS);
+  ensureSheet(wb, SHEET_INVENTORY, INVENTORY_HEADERS, INVENTORY_COLUMN_WIDTHS);
   return wb;
 }
 
@@ -319,6 +331,73 @@ export const writeCustomersList = (list) =>
         c.email || "",
         c.phone || "",
       ]);
+    }
+
+    await saveWorkbookAtomic(wb);
+  });
+
+// ---- Inventar (Sheet "Inventar") ----
+// Direkt als Tabelle lesbar und von Hand pflegbar, wie die Kundenliste.
+
+export const readInventoryList = () =>
+  withWriteLock(async () => {
+    const wb = await loadWorkbook();
+    const sheet = wb.getWorksheet(SHEET_INVENTORY);
+    const result = [];
+    const seenIds = new Set();
+    let changed = false;
+
+    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
+      const row = sheet.getRow(rowNumber);
+      if (!row.hasValues) continue;
+
+      let id = cellText(row, 1);
+      if (!id || seenIds.has(id)) {
+        id = randomId();
+        row.getCell(1).value = id;
+        changed = true;
+      }
+      seenIds.add(id);
+
+      result.push({
+        id,
+        articleNumber: cellText(row, 2),
+        name: cellText(row, 3),
+        group: cellText(row, 4),
+        stock: Number(row.getCell(5).value) || 0,
+        price: Number(row.getCell(6).value) || 0,
+      });
+    }
+
+    if (changed) {
+      await saveWorkbookAtomic(wb);
+    }
+
+    return result;
+  });
+
+export const writeInventoryList = (list) =>
+  withWriteLock(async () => {
+    const wb = await loadWorkbook();
+    const sheet = resetSheet(wb, SHEET_INVENTORY, INVENTORY_HEADERS, INVENTORY_COLUMN_WIDTHS);
+
+    // Nach Gruppe, dann Name — die Excel-Datei bleibt so von Hand lesbar.
+    const sorted = [...list].sort(
+      (a, b) =>
+        (a.group || "").localeCompare(b.group || "", "de-CH", { sensitivity: "base" }) ||
+        (a.name || "").localeCompare(b.name || "", "de-CH", { sensitivity: "base" })
+    );
+
+    for (const p of sorted) {
+      const row = sheet.addRow([
+        p.id || randomId(),
+        p.articleNumber || "",
+        p.name || "",
+        p.group || "",
+        Number(p.stock) || 0,
+        Number(p.price) || 0,
+      ]);
+      row.getCell(6).numFmt = "#,##0.00";
     }
 
     await saveWorkbookAtomic(wb);

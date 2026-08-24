@@ -9,7 +9,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getDataDir, getWorkbookPath } from "./dataDir.js";
 import { readCompany, writeCompany } from "./companyStore.js";
-import { readCustomersList, writeCustomersList, readReceiptsList, writeReceiptsList } from "./excelStore.js";
+import {
+  readCustomersList,
+  writeCustomersList,
+  readReceiptsList,
+  writeReceiptsList,
+  readInventoryList,
+  writeInventoryList,
+} from "./excelStore.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -138,6 +145,10 @@ if (!gotLock) {
       const list = await readReceiptsList();
       return { key, value: JSON.stringify(list), shared };
     }
+    if (key === "inventory-list") {
+      const list = await readInventoryList();
+      return { key, value: JSON.stringify(list), shared };
+    }
     return null;
   });
 
@@ -148,6 +159,8 @@ if (!gotLock) {
       await writeCustomersList(JSON.parse(value));
     } else if (key === "receipts-list") {
       await writeReceiptsList(JSON.parse(value));
+    } else if (key === "inventory-list") {
+      await writeInventoryList(JSON.parse(value));
     }
     return { key, value, shared };
   });
@@ -159,7 +172,7 @@ if (!gotLock) {
   });
 
   ipcMain.handle("storage:list", async (_event, prefix, shared) => {
-    const keys = ["company-info", "customers-list", "receipts-list"].filter((k) =>
+    const keys = ["company-info", "customers-list", "receipts-list", "inventory-list"].filter((k) =>
       k.startsWith(prefix || "")
     );
     return { keys, prefix, shared };

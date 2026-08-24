@@ -157,7 +157,7 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
 
   return (
     <div>
-      <div style={styles.eyebrow}>05 — Buchhaltung</div>
+      <div style={styles.eyebrow}>06 — Buchhaltung</div>
       <h1 style={styles.h1}>Buchhaltung</h1>
 
       <div style={styles.filterRow}>
