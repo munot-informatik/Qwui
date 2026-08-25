@@ -4,6 +4,9 @@ dist/
 .DS_Store
 *.log
 
+# Wrangler: lokale D1-Datenbank und Zwischenstände
+.wrangler/
+
 # Desktop-Version (Electron)
 desktop/node_modules/
 desktop/dist/

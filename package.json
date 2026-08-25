@@ -7,7 +7,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:api": "wrangler pages dev",
+    "db:query": "wrangler d1 execute munot --remote --command"
   },
   "dependencies": {
     "lucide-react": "^0.383.0",
@@ -19,6 +23,13 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.125.0"
+  },
+  "allowScripts": {
+    "workerd@1.20260820.1": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.1": true
   }
 }
