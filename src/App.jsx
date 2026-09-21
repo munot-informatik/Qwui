@@ -1169,7 +1169,7 @@ export default function ReceiptApp() {
 
             <div style={styles.sidebarFooter}>
               <a
-                href="https://github.com/mardoommo/Qwui"
+                href="https://github.com/munot-informatik/Qwui"
                 target="_blank"
                 rel="noopener noreferrer"
                 style={styles.footerLink}

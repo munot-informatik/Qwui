@@ -119,7 +119,7 @@ git remote add origin https://github.com/DEIN-USERNAME/DEIN-REPO.git
 git push -u origin main
 ```
 
-Ist das Repo (wie bei `mardoommo/Qwui`) bereits verbunden, reicht ab jetzt:
+Ist das Repo (wie bei `munot-informatik/Qwui`) bereits verbunden, reicht ab jetzt:
 
 ```bash
 git add .
@@ -364,7 +364,7 @@ Speicher-Adapter ist ausgetauscht (`src/electronStorage.js` statt
 `src/apiStorage.js`, automatisch erkannt in `src/main.jsx`).
 
 **Download:** Fertige `Qwui-1.0.0.exe` zum direkten Herunterladen unter
-[Releases](https://github.com/mardoommo/Qwui/releases/tag/v1.0.0-desktop) —
+[Releases](https://github.com/munot-informatik/Qwui/releases/tag/v1.0.0-desktop) —
 kein eigenes Bauen nötig, einfach herunterladen und doppelklicken.
 
 ### Bauen
