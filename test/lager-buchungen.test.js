@@ -9,6 +9,7 @@ import {
   rebookReceipt,
   receiveGoods,
   correctStock,
+  changeUnitStatus,
   appendMovements,
   movementsKey,
   productStock,
@@ -204,6 +205,51 @@ describe("Storno beim Löschen und Bearbeiten", () => {
     expect(edited.errors).toEqual([]);
     expect(edited.units.find((u) => u.id === unit.id).status).toBe("verkauft");
     expect(edited.inventory[0].stock).toBe(2);
+  });
+});
+
+describe("Status von Hand", () => {
+  it("reserviert ohne Bewegung und senkt den verfügbaren Bestand", () => {
+    const { state, ctx } = withThreeQueues();
+    const r = changeUnitStatus(state, state.units[0].id, "reserviert", ctx);
+    expect(r.movements).toEqual([]);
+    expect(r.inventory[0].stock).toBe(2);
+  });
+
+  it("bucht eine Retoure als Storno +1 und löst den Quittungsbezug", () => {
+    const { state, ctx } = withThreeQueues();
+    const unit = state.units[0];
+    const sold = bookReceipt(state, receiptWith([{ kind: "product", productId: "q", unitId: unit.id }]), ctx);
+    const back = changeUnitStatus(sold, unit.id, "retourniert", ctx);
+    expect(back.movements[0]).toMatchObject({ type: "storno", qty: 1, serial: unit.serial, ref: { note: "Retoure", receiptNumber: 7 } });
+    expect(back.units[0]).toMatchObject({ status: "retourniert", receiptId: null, returnedFrom: { receiptNumber: 7, customerId: "c1" } });
+  });
+
+  it("bucht beim Löschen der Quittung ein retourniertes Exemplar nicht doppelt zurück", () => {
+    const { state, ctx } = withThreeQueues();
+    const unit = state.units[0];
+    const sold = bookReceipt(state, receiptWith([{ kind: "product", productId: "q", unitId: unit.id }]), ctx);
+    const back = changeUnitStatus(sold, unit.id, "retourniert", ctx);
+    const deleted = reverseReceipt(back, sold.receipt, ctx);
+    expect(deleted.movements).toEqual([]);
+    expect(deleted.units[0].status).toBe("retourniert");
+  });
+
+  it("macht ein retourniertes Exemplar wieder verkäuflich", () => {
+    const { state, ctx } = withThreeQueues();
+    const unit = state.units[0];
+    const sold = bookReceipt(state, receiptWith([{ kind: "product", productId: "q", unitId: unit.id }]), ctx);
+    const back = changeUnitStatus(sold, unit.id, "retourniert", ctx);
+    const restocked = changeUnitStatus(back, unit.id, "an_lager", ctx);
+    expect(restocked.movements).toEqual([]);
+    expect(restocked.inventory[0].stock).toBe(3);
+  });
+
+  it("lässt «verkauft» nicht von Hand setzen", () => {
+    const { state, ctx } = withThreeQueues();
+    const r = changeUnitStatus(state, state.units[0].id, "verkauft", ctx);
+    expect(r.errors).toHaveLength(1);
+    expect(r.units).toBe(state.units);
   });
 });
 

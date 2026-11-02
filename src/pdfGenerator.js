@@ -5,6 +5,18 @@
 // bei der reinen CSS-Druck-Lösung im Weg standen.
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import {
+  itemKind,
+  itemQuantity,
+  itemUnitPrice,
+  itemListPrice,
+  itemDiscountPercent,
+  itemLineTotal,
+  formatPercent,
+  quantityPrefix,
+  receiptListTotal,
+  receiptDiscountTotal,
+} from "../shared/items.js";
 
 const MM = 2.834645669; // 1mm in PDF-Punkten
 const mm = (v) => v * MM;
@@ -109,41 +121,8 @@ function dayWord(n) {
   return n === 1 ? "Tag" : "Tagen";
 }
 
-// ---- Positionen: Produkt/Dienstleistung, Listenpreis, Rabatt ----
-// Spiegelt bewusst die Helfer aus src/App.jsx (gleiches Duplizierungs-Muster
-// wie chf/formatDateDE). "amount" ist der Listenpreis, verrechnet wird der
-// Betrag nach Rabatt.
-
-function itemKind(it) {
-  return it?.kind === "product" ? "product" : "service";
-}
-
-function itemListPrice(it) {
-  return Number(it?.amount) || 0;
-}
-
-function itemDiscountPercent(it) {
-  const raw = Number(it?.discountPercent);
-  if (!Number.isFinite(raw) || raw <= 0) return 0;
-  return Math.min(100, raw);
-}
-
-function itemLineTotal(it) {
-  const gross = itemListPrice(it);
-  return round2(gross - round2((gross * itemDiscountPercent(it)) / 100));
-}
-
-function formatPercent(p) {
-  return Number.isInteger(p) ? String(p) : String(Math.round(p * 100) / 100);
-}
-
-function receiptListTotal(receipt) {
-  return round2((receipt.items || []).reduce((s, it) => s + itemListPrice(it), 0));
-}
-
-function receiptDiscountTotal(receipt) {
-  return round2(receiptListTotal(receipt) - round2((receipt.items || []).reduce((s, it) => s + itemLineTotal(it), 0)));
-}
+// Positionen (Art, Menge, Listenpreis, Rabatt) rechnen mit denselben Helfern
+// wie Formular und Bildschirm-Beleg, siehe shared/items.js.
 
 function ibanDisplay(iban) {
   return (iban || "").replace(/\s+/g, "").toUpperCase().replace(/(.{4})/g, "$1 ").trim();
@@ -452,13 +431,18 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
     const isProduct = itemKind(it) === "product";
     const listPrice = itemListPrice(it);
 
-    // Beschreibung; bei Produkten aus dem Inventar zusätzlich die Artikelnummer.
+    // Beschreibung (mit Menge, falls nicht 1); bei Produkten aus dem Inventar
+    // zusätzlich die Artikelnummer, bei mehreren Stück der Stückpreis.
     const descMaxRight = disc > 0 ? (isProduct ? COL_LIST_RIGHT : COL_DISCOUNT_RIGHT) : COL_AMOUNT_RIGHT;
-    const descLines = wrapText(it.description, font, 9.5, descMaxRight - MARGIN - mm(4));
+    const descLines = wrapText(`${quantityPrefix(it)}${it.description}`, font, 9.5, descMaxRight - MARGIN - mm(4));
     text(descLines[0], MARGIN, y, { size: 9.5 });
-    if (isProduct && it.articleNumber) {
+    const meta = [
+      isProduct && it.articleNumber ? it.articleNumber : "",
+      itemQuantity(it) !== 1 ? `à CHF ${chf(itemUnitPrice(it))}` : "",
+    ].filter(Boolean);
+    if (meta.length) {
       const dw = font.widthOfTextAtSize(toWinAnsiSafe(descLines[0]), 9.5);
-      text(` · ${it.articleNumber}`, MARGIN + dw, y, { size: 8, color: COLOR.lightGray });
+      text(` · ${meta.join(" · ")}`, MARGIN + dw, y, { size: 8, color: COLOR.lightGray });
     }
 
     if (disc > 0) {
@@ -492,6 +476,13 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
       text(l, MARGIN, y, { size: 9.5 });
       y -= 10;
     });
+
+    // Seriennummer des verkauften Exemplars — Grundlage für jeden späteren
+    // Garantiefall, deshalb auf dem Beleg selbst und nicht nur in Qwui.
+    if (it.serial) {
+      text(`S/N: ${it.serial}`, MARGIN, y, { size: 8, color: COLOR.gray });
+      y -= 10;
+    }
 
     line(MARGIN, y, PAGE_W - MARGIN, COLOR.line, 0.75);
     y -= 12;

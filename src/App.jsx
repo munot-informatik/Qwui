@@ -5,6 +5,32 @@ import BuchhaltungTab from "./BuchhaltungTab.jsx";
 import { buildReceiptPdfBytes } from "./receiptPdf.js";
 import { isValidSwissIban, formatIbanDisplay } from "./qrbill.js";
 import {
+  itemKind,
+  itemQuantity,
+  itemUnitPrice,
+  itemListPrice,
+  itemDiscountPercent,
+  itemDiscountAmount,
+  itemLineTotal,
+  formatPercent,
+  quantityPrefix,
+} from "../shared/items.js";
+import {
+  MOVEMENTS_PREFIX,
+  isMovementsKey,
+  isSerialTracked,
+  productStock,
+  bookReceipt,
+  reverseReceipt,
+  rebookReceipt,
+  correctStock,
+  changeUnitStatus,
+  receiveGoods,
+  appendMovements,
+} from "../shared/stock.js";
+import { UNIT_STATUS, isSellable, checkNewSerials } from "../shared/serials.js";
+import { StockCell, UnitList, Wareneingang, SeriennummerSuche, Lagerbewegungen } from "./Lager.jsx";
+import {
   Plus,
   Trash2,
   Printer,
@@ -31,13 +57,18 @@ import {
 // Aktuelle Version des Backup-Dateiformats (siehe exportAllData/handleImportFileSelect).
 // Rein informativ beim Import — kein harter Kompatibilitäts-Check, damit auch
 // künftige, abwärtskompatible Versionen weiterhin importiert werden können.
-const BACKUP_SCHEMA_VERSION = 1;
+// 2 = ab 1.2.0 mit Exemplaren (serialUnits) und Lagerbewegungen (stockMovements).
+const BACKUP_SCHEMA_VERSION = 2;
 
 const KEYS = {
   company: "company-info",
   customers: "customers-list",
   receipts: "receipts-list",
   inventory: "inventory-list",
+  // Ab 1.2.0: einzelne Exemplare seriennummernpflichtiger Artikel. Die
+  // Lagerbewegungen liegen pro Jahr unter "stock-movements-JJJJ" (siehe
+  // shared/stock.js, movementsKey).
+  units: "serial-units",
 };
 
 const emptyCompany = {
@@ -56,50 +87,32 @@ const emptyCompany = {
   qrBill: { name: "", iban: "", street: "", houseNumber: "", postalCode: "", city: "", country: "CH" },
 };
 
-// ---- Rechnungspositionen: Produkt/Dienstleistung, Listenpreis und Rabatt ----
-// Eine Position speichert in "amount" weiterhin den LISTPREIS (Preis vor
-// Rabatt). Der tatsächlich verrechnete Betrag ergibt sich erst aus
-// itemLineTotal(). Alte Positionen ohne kind/discountPercent verhalten sich
-// exakt wie bisher: Dienstleistung, 0 % Rabatt, Betrag = Listenpreis.
+// ---- Rechnungspositionen: Produkt/Dienstleistung, Menge, Listenpreis und Rabatt ----
+// Eine Position speichert in "amount" den LISTENPREIS PRO STÜCK (vor Rabatt).
+// Gerechnet wird mit den Helfern aus shared/items.js. Alte Positionen ohne
+// kind/quantity/discountPercent verhalten sich exakt wie bisher:
+// Dienstleistung, 1 Stück, 0 % Rabatt, Betrag = Listenpreis.
+//
+// Produkte aus dem Inventar tragen productId (Bezug für die Lagerbuchung),
+// seriennummernpflichtige zusätzlich unitId und serial des verkauften
+// Exemplars.
 
 function emptyItem() {
-  return { id: uid(), description: "", amount: "", kind: "service", discountPercent: "", articleNumber: "" };
+  return {
+    id: uid(),
+    description: "",
+    amount: "",
+    quantity: "1",
+    kind: "service",
+    discountPercent: "",
+    articleNumber: "",
+    productId: "",
+    unitId: "",
+    serial: "",
+  };
 }
 
-function itemKind(it) {
-  return it?.kind === "product" ? "product" : "service";
-}
-
-function itemListPrice(it) {
-  return Number(it?.amount) || 0;
-}
-
-// Rabatt in Prozent, auf 0–100 begrenzt — ein Tippfehler wie "1000" darf keine
-// negative Rechnung erzeugen.
-function itemDiscountPercent(it) {
-  const raw = Number(it?.discountPercent);
-  if (!Number.isFinite(raw) || raw <= 0) return 0;
-  return Math.min(100, raw);
-}
-
-function itemDiscountAmount(it) {
-  return round2((itemListPrice(it) * itemDiscountPercent(it)) / 100);
-}
-
-// Verrechneter Betrag der Position nach Abzug des Rabatts.
-function itemLineTotal(it) {
-  return round2(itemListPrice(it) - itemDiscountAmount(it));
-}
-
-function hasDiscount(it) {
-  return itemDiscountPercent(it) > 0;
-}
-
-// Rabatt-Prozentsatz für die Anzeige: ganze Zahlen ohne Nachkommastellen.
-function formatPercent(p) {
-  return Number.isInteger(p) ? String(p) : String(Math.round(p * 100) / 100);
-}
-const emptyProduct = { articleNumber: "", name: "", group: "", stock: "", price: "" };
+const emptyProduct = { articleNumber: "", name: "", group: "", stock: "", price: "", serialTracked: false };
 
 // Anordnung des Logos im Dokumentkopf: neben dem Firmen-Textblock ("inline")
 // oder auf einer eigenen Zeile darüber ("above"). Firmendaten ohne diese
@@ -263,6 +276,13 @@ export default function ReceiptApp() {
   const [customers, setCustomers] = useState([]);
   const [receipts, setReceipts] = useState([]);
   const [inventory, setInventory] = useState([]);
+  const [units, setUnits] = useState([]);
+  // Lagerbewegungen, nach Jahres-Schlüssel: { "stock-movements-2027": [...] }
+  const [movementsByKey, setMovementsByKey] = useState({});
+  // Meldungen der Lagerbuchung beim Erstellen/Bearbeiten einer Quittung:
+  // errors verhindern das Speichern, warnings (z. B. negativer Bestand) nicht.
+  const [stockErrors, setStockErrors] = useState([]);
+  const [stockWarnings, setStockWarnings] = useState([]);
   const [currentReceipt, setCurrentReceipt] = useState(null);
   const [editingReceiptId, setEditingReceiptId] = useState(null);
 
@@ -312,6 +332,20 @@ export default function ReceiptApp() {
         console.error("Laden des Inventars fehlgeschlagen", e);
         loadFailed = true;
       }
+      try {
+        const u = await window.storage.get(KEYS.units);
+        if (u && u.value) setUnits(JSON.parse(u.value));
+        const { keys = [] } = (await window.storage.list(MOVEMENTS_PREFIX)) || {};
+        const loadedMovements = {};
+        for (const key of keys.filter(isMovementsKey)) {
+          const m = await window.storage.get(key);
+          if (m && m.value) loadedMovements[key] = JSON.parse(m.value);
+        }
+        setMovementsByKey(loadedMovements);
+      } catch (e) {
+        console.error("Laden der Exemplare/Lagerbewegungen fehlgeschlagen", e);
+        loadFailed = true;
+      }
       if (loadFailed) {
         setPersistError(
           "Laden fehlgeschlagen — möglicherweise ist die Datenquelle gerade nicht erreichbar."
@@ -337,6 +371,39 @@ export default function ReceiptApp() {
       setPersistError(`Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
       return false;
     }
+  }
+
+  // Speichert eine Lagerbuchung in EINEM Schritt (storage.setMany): neues
+  // Inventar, Exemplare, angehängte Lagerbewegungen und optional weitere
+  // Listen (z. B. die Quittungen). So können Quittung und Bestand nie
+  // auseinanderlaufen, auch wenn das Speichern mittendrin scheitert.
+  // extra: [{ key, value, setter }]
+  async function commitStock({ inventory: nextInventory, units: nextUnits, movements = [], extra = [] }) {
+    cancelPendingInventorySave();
+    const appended = appendMovements(movementsByKey, movements);
+    const entries = [
+      { key: KEYS.inventory, value: nextInventory },
+      { key: KEYS.units, value: nextUnits },
+      ...Object.entries(appended).map(([key, value]) => ({ key, value })),
+      ...extra.map(({ key, value }) => ({ key, value })),
+    ];
+    setInventory(nextInventory);
+    setUnits(nextUnits);
+    if (movements.length) setMovementsByKey((prev) => ({ ...prev, ...appended }));
+    extra.forEach(({ value, setter }) => setter && setter(value));
+    try {
+      await window.storage.setMany(entries.map(({ key, value }) => ({ key, value: JSON.stringify(value) })));
+      setPersistError("");
+      return true;
+    } catch (e) {
+      console.error("Speichern der Lagerbuchung fehlgeschlagen", e);
+      setPersistError(`Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
+      return false;
+    }
+  }
+
+  function stockCtx() {
+    return { now: new Date().toISOString(), source: "app", newId: uid };
   }
 
   async function saveCompany() {
@@ -400,6 +467,8 @@ export default function ReceiptApp() {
       customers,
       receipts,
       inventory,
+      serialUnits: units,
+      stockMovements: movementsByKey,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -457,12 +526,35 @@ export default function ReceiptApp() {
       const okInventory = Array.isArray(importPreview.inventory)
         ? await persist(KEYS.inventory, importPreview.inventory, setInventory)
         : true;
+      // Ab 1.2.0: Exemplare und Lagerbewegungen. Fehlen sie (Backup aus einer
+      // älteren Version), bleiben die vorhandenen stehen — die Vorschau warnt.
+      let okStock = true;
+      if (Array.isArray(importPreview.serialUnits)) {
+        okStock = await persist(KEYS.units, importPreview.serialUnits, setUnits);
+      }
+      if (okStock && importPreview.stockMovements && typeof importPreview.stockMovements === "object") {
+        const imported = Object.fromEntries(
+          Object.entries(importPreview.stockMovements).filter(([key, list]) => isMovementsKey(key) && Array.isArray(list))
+        );
+        try {
+          for (const key of Object.keys(movementsByKey)) {
+            if (!imported[key]) await window.storage.delete(key);
+          }
+          const entries = Object.entries(imported).map(([key, list]) => ({ key, value: JSON.stringify(list) }));
+          if (entries.length) await window.storage.setMany(entries);
+          setMovementsByKey(imported);
+        } catch (e) {
+          console.error("Import der Lagerbewegungen fehlgeschlagen", e);
+          setPersistError(`Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
+          okStock = false;
+        }
+      }
 
       // Erfolg nur melden, wenn wirklich alles geschrieben wurde. Sonst bleibt
       // die Bestätigung stehen, damit der Import wiederholt werden kann — der
       // React-State zeigt sonst die importierten Daten an, während in der
       // Datenbank noch die alten stehen und beim nächsten Laden zurückkommen.
-      if (okCompany && okCustomers && okReceipts && okInventory) {
+      if (okCompany && okCustomers && okReceipts && okInventory && okStock) {
         setImportPreview(null);
         setSaveStatus("Backup importiert");
         setTimeout(() => setSaveStatus(""), 3000);
@@ -535,6 +627,29 @@ export default function ReceiptApp() {
 
   const [inventorySearch, setInventorySearch] = useState("");
   const [inventoryGroupFilter, setInventoryGroupFilter] = useState("");
+  // Bereich im Reiter Inventar: Artikel | Wareneingang | Seriennummer | Bewegungen
+  const [inventoryView, setInventoryView] = useState("articles");
+  // Artikel, deren Exemplarliste aufgeklappt ist
+  const [openUnitLists, setOpenUnitLists] = useState(() => new Set());
+
+  function toggleUnitList(id) {
+    setOpenUnitLists((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Name des Kunden zu einem Exemplar — nur hier in der App, der Assistent
+  // bekommt ausschliesslich die Kunden-ID.
+  function unitCustomerName(unit) {
+    const id = unit.customerId || unit.returnedFrom?.customerId;
+    const c = id && customers.find((x) => x.id === id);
+    if (c) return c.name;
+    const receiptId = unit.receiptId || unit.returnedFrom?.receiptId;
+    return receipts.find((r) => r.id === receiptId)?.customer?.name || "";
+  }
 
   // Immer alphabetisch — so erscheinen die Artikel in der Rechnungsstellung
   // und im Inventar in derselben, erwartbaren Reihenfolge.
@@ -570,19 +685,84 @@ export default function ReceiptApp() {
     pendingInventory.current = null;
   }
 
-  async function addProduct() {
-    if (!newProduct.name.trim()) return;
+  // Legt einen Artikel an. Ein Anfangsbestand wird als Inventurkorrektur
+  // gebucht, damit jede Menge im Protokoll belegt ist. Seriennummernpflichtige
+  // Artikel starten bei 0 — ihre Exemplare kommen über den Wareneingang.
+  // Liefert den neuen Artikel zurück (für den Wareneingang).
+  async function addProduct(fields = newProduct) {
+    if (!fields.name.trim()) return null;
     cancelPendingInventorySave();
+    const serialTracked = !!fields.serialTracked;
     const entry = {
       id: uid(),
-      articleNumber: newProduct.articleNumber.trim(),
-      name: newProduct.name.trim(),
-      group: newProduct.group.trim(),
-      stock: Number(newProduct.stock) || 0,
-      price: Number(newProduct.price) || 0,
+      articleNumber: fields.articleNumber.trim(),
+      name: fields.name.trim(),
+      group: fields.group.trim(),
+      stock: 0,
+      price: Number(fields.price) || 0,
+      serialTracked,
     };
-    await persist(KEYS.inventory, [...inventory, entry], setInventory);
-    setNewProduct(emptyProduct);
+    const initial = serialTracked ? 0 : Number(fields.stock) || 0;
+    const result = correctStock({ inventory: [...inventory, entry], units }, entry.id, initial, stockCtx(), "Anfangsbestand");
+    await commitStock(result);
+    if (fields === newProduct) setNewProduct(emptyProduct);
+    return entry;
+  }
+
+  // Neue Zählmenge von Hand (nur Artikel ohne Seriennummernpflicht).
+  async function setProductStock(id, value) {
+    const result = correctStock({ inventory, units }, id, value, stockCtx());
+    if (result.movements.length) await commitStock(result);
+  }
+
+  // Seriennummernpflicht nur umschalten, solange es nicht zu Widersprüchen
+  // kommt: Einschalten bei Bestand 0 (die Exemplare kommen danach über den
+  // Wareneingang), Ausschalten nur ohne erfasste Exemplare.
+  async function setProductSerialTracked(id, on) {
+    const p = inventory.find((x) => x.id === id);
+    if (!p) return;
+    setInventoryError("");
+    if (on && (Number(p.stock) || 0) !== 0) {
+      setInventoryError(
+        `«${p.name}» hat noch Bestand ${p.stock}. Zuerst auf 0 setzen, dann die Exemplare mit Seriennummer über den Wareneingang erfassen.`
+      );
+      return;
+    }
+    if (!on && units.some((u) => u.productId === id)) {
+      setInventoryError(`«${p.name}» hat bereits Exemplare mit Seriennummer — die Pflicht lässt sich nicht mehr abschalten.`);
+      return;
+    }
+    cancelPendingInventorySave();
+    await persist(KEYS.inventory, inventory.map((x) => (x.id === id ? { ...x, serialTracked: on } : x)), setInventory);
+  }
+
+  async function changeStatusOfUnit(unitId, status) {
+    const result = changeUnitStatus({ inventory, units }, unitId, status, stockCtx());
+    if (result.errors.length) {
+      setInventoryError(result.errors.join(" "));
+      return;
+    }
+    setInventoryError("");
+    await commitStock(result);
+  }
+
+  // Wareneingang: legt Exemplare bzw. Menge an und bucht die Bewegungen.
+  // Liefert die Fehlermeldungen zurück (leer = gespeichert).
+  async function bookGoodsIn(entry) {
+    const result = receiveGoods({ inventory, units }, entry, stockCtx(), checkNewSerials);
+    if (result.errors.length) return result.errors;
+    const ok = await commitStock(result);
+    return ok ? [] : ["Speichern fehlgeschlagen — bitte erneut versuchen."];
+  }
+
+  // Sprung aus der Seriennummer-Suche zur Quittung.
+  function openReceiptById(id) {
+    const r = receipts.find((x) => x.id === id);
+    if (r) openReceipt(r);
+  }
+
+  async function updateUnitNote(unitId, note) {
+    await commitStock({ inventory, units: units.map((u) => (u.id === unitId ? { ...u, note } : u)) });
   }
 
   // Beim Tippen in der Inventartabelle nicht bei jedem Zeichen speichern —
@@ -626,6 +806,13 @@ export default function ReceiptApp() {
   }
 
   async function deleteProduct(id) {
+    // Exemplare (und damit Seriennummern verkaufter Queues) dürfen nicht ihren
+    // Artikel verlieren — sonst lässt sich ein Garantiefall nicht mehr klären.
+    const p = inventory.find((x) => x.id === id);
+    if (units.some((u) => u.productId === id)) {
+      setInventoryError(`«${p?.name || "Artikel"}» hat Exemplare mit Seriennummer und lässt sich nicht löschen.`);
+      return;
+    }
     cancelPendingInventorySave();
     await persist(KEYS.inventory, inventory.filter((p) => p.id !== id), setInventory);
   }
@@ -649,11 +836,12 @@ export default function ReceiptApp() {
           "Artikel-Name": p.name || "",
           "Stückzahl verfügbar": Number(p.stock) || 0,
           "Preis (CHF)": Number(p.price) || 0,
+          Seriennummernpflichtig: isSerialTracked(p) ? "ja" : "nein",
         }));
       const ws = XLSX.utils.json_to_sheet(rows, {
-        header: ["Produktgruppe", "Artikelnummer", "Artikel-Name", "Stückzahl verfügbar", "Preis (CHF)"],
+        header: ["Produktgruppe", "Artikelnummer", "Artikel-Name", "Stückzahl verfügbar", "Preis (CHF)", "Seriennummernpflichtig"],
       });
-      ws["!cols"] = [{ wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 18 }, { wch: 14 }];
+      ws["!cols"] = [{ wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 18 }, { wch: 14 }, { wch: 22 }];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Inventar");
       XLSX.writeFile(wb, `Inventar_${todayISO()}.xlsx`);
@@ -691,7 +879,12 @@ export default function ReceiptApp() {
         return "";
       };
 
+      // Die Stückzahlen aus der Datei werden nicht direkt übernommen, sondern
+      // danach als Inventurkorrektur gebucht (targets). Bei
+      // seriennummernpflichtigen Artikeln zählt allein die Anzahl Exemplare —
+      // ihre Stückzahl in der Datei wird ignoriert.
       const next = [...inventory];
+      const targets = new Map();
       let added = 0;
       let updated = 0;
       for (const row of rows) {
@@ -714,19 +907,30 @@ export default function ReceiptApp() {
             ...next[idx],
             name: name || next[idx].name,
             group: hasGroupColumn ? group : next[idx].group || "",
-            stock,
             price,
           };
+          if (!isSerialTracked(next[idx])) targets.set(next[idx].id, stock);
           updated++;
         } else {
-          next.push({ id: uid(), articleNumber, name, group, stock, price });
+          // Seriennummernpflicht nur bei neuen Artikeln aus der Datei lesen —
+          // bei bestehenden würde ein Umschalten die Exemplare durcheinanderbringen.
+          const serialTracked = /^(ja|x|1|true)$/i.test(String(pick(row, "Seriennummernpflichtig")).trim());
+          const entry = { id: uid(), articleNumber, name, group, stock: 0, price, serialTracked };
+          next.push(entry);
+          if (!serialTracked) targets.set(entry.id, stock);
           added++;
         }
       }
       if (!added && !updated) {
         throw new Error("Keine gültigen Zeilen gefunden (erwartet: Artikelnummer, Artikel-Name, Stückzahl verfügbar, Preis).");
       }
-      const ok = await persist(KEYS.inventory, next, setInventory);
+      let state = { inventory: next, units, movements: [] };
+      const ctx = stockCtx();
+      for (const [id, target] of targets) {
+        const r = correctStock(state, id, target, ctx, "Excel-Import");
+        state = { inventory: r.inventory, units: r.units, movements: [...state.movements, ...r.movements] };
+      }
+      const ok = await commitStock(state);
       setInventoryError(
         ok
           ? ""
@@ -763,24 +967,62 @@ export default function ReceiptApp() {
   function setItemKind(id, kind) {
     setItems(
       items.map((it) =>
-        it.id === id ? { ...it, kind, ...(kind === "service" ? { articleNumber: "" } : {}) } : it
+        it.id === id
+          ? { ...it, kind, ...(kind === "service" ? { articleNumber: "", productId: "", unitId: "", serial: "" } : {}) }
+          : it
       )
     );
   }
 
   // Übernimmt einen Inventar-Artikel in die Position: Name, Listenpreis und
   // Artikelnummer. Der Rabatt der Position bleibt bestehen.
+  // Ein gewähltes Exemplar gilt nur für diesen Artikel — beim Wechsel des
+  // Artikels wird es zurückgesetzt. Seriennummernpflichtige Artikel stehen
+  // immer mit Menge 1 auf der Position (ein Exemplar pro Position).
   function pickInventoryItem(id, productId) {
     const p = inventory.find((x) => x.id === productId);
     setItems(
       items.map((it) =>
         it.id === id
           ? p
-            ? { ...it, description: p.name || "", amount: String(p.price ?? ""), articleNumber: p.articleNumber || "" }
-            : { ...it, articleNumber: "" }
+            ? {
+                ...it,
+                description: p.name || "",
+                amount: String(p.price ?? ""),
+                articleNumber: p.articleNumber || "",
+                productId: p.id,
+                unitId: "",
+                serial: "",
+                ...(isSerialTracked(p) ? { quantity: "1" } : {}),
+              }
+            : { ...it, articleNumber: "", productId: "", unitId: "", serial: "" }
           : it
       )
     );
+  }
+
+  function pickUnit(id, unitId) {
+    const unit = units.find((u) => u.id === unitId);
+    setItems(items.map((it) => (it.id === id ? { ...it, unitId: unit ? unit.id : "", serial: unit ? unit.serial : "" } : it)));
+  }
+
+  // Artikel einer Position: über productId (ab 1.2.0), sonst wie bisher über
+  // die Artikelnummer.
+  function productOfItem(it) {
+    if (it.productId) return inventory.find((p) => p.id === it.productId) || null;
+    if (it.articleNumber) return inventory.find((p) => p.articleNumber && p.articleNumber === it.articleNumber) || null;
+    return null;
+  }
+
+  // Wählbare Exemplare für eine Position: an Lager oder reserviert, nicht
+  // schon in einer anderen Position gewählt. Beim Bearbeiten bleiben die
+  // Exemplare wählbar, die diese Quittung selbst verkauft hat.
+  function selectableUnits(it, product) {
+    const takenElsewhere = new Set(items.filter((x) => x.id !== it.id && x.unitId).map((x) => x.unitId));
+    return units
+      .filter((u) => u.productId === product.id && !takenElsewhere.has(u.id))
+      .filter((u) => isSellable(u) || (editingReceiptId && u.receiptId === editingReceiptId))
+      .sort((a, b) => (a.serial || "").localeCompare(b.serial || "", "de-CH"));
   }
 
   const VAT_RATE = 0.081; // Normalsatz Schweiz für Dienstleistungen, Stand 2026
@@ -803,6 +1045,8 @@ export default function ReceiptApp() {
     setVatEnabled(false);
     setQrBillEnabled(false);
     setPaymentTermDays(DEFAULT_PAYMENT_TERM_DAYS);
+    setStockErrors([]);
+    setStockWarnings([]);
   }
 
   function getActiveCustomer() {
@@ -818,8 +1062,41 @@ export default function ReceiptApp() {
   const canCreate = activeCustomer.name.trim() && validItems.length > 0;
   const needsAddress = total >= 400;
 
+  // Kunden-ID für den Beleg: gespeicherter Kunde → seine ID; manuell
+  // eingetragener Empfänger → eine eigene ID, ohne dass er in der Kundenliste
+  // landet. So lässt sich jedes verkaufte Exemplar einem Kunden zuordnen, und
+  // der Assistent bekommt nur diese ID statt Name und Adresse.
+  function receiptCustomer(existing) {
+    if (selectedCustomerId) {
+      const c = customers.find((x) => x.id === selectedCustomerId);
+      if (c) return { ...c };
+    }
+    const keepId = existing && !customers.some((c) => c.id === existing.customer?.id) ? existing.customer?.id : "";
+    return { ...activeCustomer, id: keepId || `m-${uid()}` };
+  }
+
+  // Positionen so speichern, wie sie auf dem Beleg stehen: Menge als Zahl,
+  // Lagerbezug nur bei Produkten.
+  function cleanItems(list) {
+    return list.map((it) => {
+      const base = { ...it, quantity: itemQuantity(it) };
+      if (itemKind(it) !== "product") {
+        return { ...base, productId: "", unitId: "", serial: "" };
+      }
+      const unit = it.unitId ? units.find((u) => u.id === it.unitId) : null;
+      return { ...base, serial: unit ? unit.serial : "" };
+    });
+  }
+
+  function showStockResult(result) {
+    setStockErrors(result.errors || []);
+    setStockWarnings(result.warnings || []);
+    return !(result.errors && result.errors.length);
+  }
+
   async function createReceipt() {
     if (!canCreate) return;
+    const stockState = { inventory, units };
 
     if (editingReceiptId) {
       const existing = receipts.find((r) => r.id === editingReceiptId);
@@ -840,12 +1117,12 @@ export default function ReceiptApp() {
       // dem *alten* Snapshot gebaut — mit leerer IBAN und damit unbezahlbar.
       const snapshotIbanUsable = isValidSwissIban(existing.company?.qrBill?.iban);
       const companySnapshot = isQrBill && !snapshotIbanUsable ? company : existing.company;
-      const updated = {
+      const draft = {
         ...existing,
         company: companySnapshot,
         date,
-        customer: { ...activeCustomer },
-        items: validItems,
+        customer: receiptCustomer(existing),
+        items: cleanItems(validItems),
         netTotal,
         vatEnabled,
         vatRate: VAT_RATE,
@@ -857,8 +1134,17 @@ export default function ReceiptApp() {
         note,
         editedAt: new Date().toISOString(),
       };
+      // Alte Buchung stornieren, neue Fassung buchen — oder gar nichts.
+      const booked = rebookReceipt(stockState, existing, draft, stockCtx());
+      if (!showStockResult(booked)) return;
+      const updated = booked.receipt;
       const next = receipts.map((r) => (r.id === editingReceiptId ? updated : r));
-      await persist(KEYS.receipts, next, setReceipts);
+      await commitStock({
+        inventory: booked.inventory,
+        units: booked.units,
+        movements: booked.movements,
+        extra: [{ key: KEYS.receipts, value: next, setter: setReceipts }],
+      });
       setCurrentReceipt(updated);
       setEditingReceiptId(null);
       setMode("preview");
@@ -867,12 +1153,12 @@ export default function ReceiptApp() {
 
     const number = nextReceiptNumber(receipts);
     const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban);
-    const receipt = {
+    const draft = {
       id: uid(),
       number,
       date,
-      customer: { ...activeCustomer },
-      items: validItems,
+      customer: receiptCustomer(null),
+      items: cleanItems(validItems),
       netTotal,
       vatEnabled,
       vatRate: VAT_RATE,
@@ -885,16 +1171,25 @@ export default function ReceiptApp() {
       company,
       createdAt: new Date().toISOString(),
     };
+    const booked = bookReceipt(stockState, draft, stockCtx());
+    if (!showStockResult(booked)) return;
+    const receipt = booked.receipt;
     const next = [...receipts, receipt];
-    await persist(KEYS.receipts, next, setReceipts);
+    await commitStock({
+      inventory: booked.inventory,
+      units: booked.units,
+      movements: booked.movements,
+      extra: [{ key: KEYS.receipts, value: next, setter: setReceipts }],
+    });
     setCurrentReceipt(receipt);
     setMode("preview");
   }
 
   function startEditReceipt(r) {
-    const matchingCustomer = customers.find(
-      (c) => c.name === r.customer.name && c.email === r.customer.email
-    );
+    // Ab 1.2.0 über die Kunden-ID; ältere Belege kennen nur Name und E-Mail.
+    const matchingCustomer =
+      customers.find((c) => r.customer.id && c.id === r.customer.id) ||
+      customers.find((c) => c.name === r.customer.name && c.email === r.customer.email);
     if (matchingCustomer) {
       setSelectedCustomerId(matchingCustomer.id);
       setManualCustomer(emptyPerson);
@@ -912,7 +1207,9 @@ export default function ReceiptApp() {
       });
     }
     setDate(r.date);
-    setItems(r.items.map((it) => ({ ...it, id: uid() })));
+    setItems(r.items.map((it) => ({ ...emptyItem(), ...it, quantity: String(itemQuantity(it)), id: uid() })));
+    setStockErrors([]);
+    setStockWarnings([]);
     setNote(r.note || "");
     setVatEnabled(!!r.vatEnabled);
     setQrBillEnabled(!!r.qrBillEnabled);
@@ -923,9 +1220,23 @@ export default function ReceiptApp() {
   }
 
 
+  // Löschen storniert die Lagerbuchung der Quittung: Bestand zurück,
+  // verkaufte Exemplare wieder "an Lager". Quittungen von vor 1.2.0 haben
+  // nichts gebucht, dort ändert sich am Bestand nichts.
   async function deleteReceipt(id) {
+    const existing = receipts.find((r) => r.id === id);
     const next = receipts.filter((r) => r.id !== id);
-    await persist(KEYS.receipts, next, setReceipts);
+    if (existing && Array.isArray(existing.stockBooking) && existing.stockBooking.length) {
+      const reversed = reverseReceipt({ inventory, units }, existing, stockCtx());
+      await commitStock({
+        inventory: reversed.inventory,
+        units: reversed.units,
+        movements: reversed.movements,
+        extra: [{ key: KEYS.receipts, value: next, setter: setReceipts }],
+      });
+    } else {
+      await persist(KEYS.receipts, next, setReceipts);
+    }
     if (currentReceipt && currentReceipt.id === id) {
       backToForm();
     }
@@ -945,6 +1256,7 @@ export default function ReceiptApp() {
   }
 
   function openReceipt(r) {
+    setStockWarnings([]);
     setCurrentReceipt(r);
     setMode("preview");
   }
@@ -1187,7 +1499,14 @@ export default function ReceiptApp() {
             </div>
           </nav>
 
-          <main style={{ ...styles.main, ...(tab === "accounting" ? { maxWidth: 880 } : {}) }}>
+          <main
+            style={{
+              ...styles.main,
+              ...(tab === "accounting" ? { maxWidth: 880 } : {}),
+              // Artikeltabelle, Exemplare und Bewegungen brauchen mehr Breite.
+              ...(tab === "inventory" ? { maxWidth: 1040 } : {}),
+            }}
+          >
             {tab === "new" && (
               <div style={styles.panel}>
                 <Eyebrow>01 — Neue Quittung</Eyebrow>
@@ -1303,6 +1622,8 @@ export default function ReceiptApp() {
                     {items.map((it) => {
                       const kind = itemKind(it);
                       const disc = itemDiscountPercent(it);
+                      const product = kind === "product" ? productOfItem(it) : null;
+                      const serialTracked = isSerialTracked(product);
                       return (
                         <div key={it.id} style={styles.itemCard}>
                           <div style={styles.itemRow}>
@@ -1326,7 +1647,7 @@ export default function ReceiptApp() {
                                 onChange={(e) => updateItem(it.id, "amount", e.target.value)}
                                 className="mono"
                                 style={{ width: 90, textAlign: "right" }}
-                                title={kind === "product" ? "Listenpreis" : "Preis"}
+                                title={kind === "product" ? "Listenpreis pro Stück" : "Preis"}
                               />
                             </div>
                             <button
@@ -1344,9 +1665,7 @@ export default function ReceiptApp() {
                               <label style={styles.itemMetaField}>
                                 <span style={styles.itemMetaLabel}>Artikel</span>
                                 <select
-                                  value={
-                                    sortedInventory.find((p) => p.articleNumber && p.articleNumber === it.articleNumber)?.id || ""
-                                  }
+                                  value={product?.id || ""}
                                   onChange={(e) => pickInventoryItem(it.id, e.target.value)}
                                   style={{ ...styles.select, width: "auto", minWidth: 190 }}
                                   disabled={sortedInventory.length === 0}
@@ -1362,12 +1681,55 @@ export default function ReceiptApp() {
                                       {groupItems.map((p) => (
                                         <option key={p.id} value={p.id}>
                                           {p.articleNumber ? `${p.articleNumber} · ` : ""}
-                                          {p.name} — CHF {chf(p.price)}
+                                          {p.name} — CHF {chf(p.price)} · {productStock(p, units)} an Lager
                                         </option>
                                       ))}
                                     </optgroup>
                                   ))}
                                 </select>
+                              </label>
+                            )}
+
+                            {product && serialTracked && (
+                              <label style={styles.itemMetaField}>
+                                <span style={styles.itemMetaLabel}>Seriennummer</span>
+                                <select
+                                  value={it.unitId || ""}
+                                  onChange={(e) => pickUnit(it.id, e.target.value)}
+                                  style={{
+                                    ...styles.select,
+                                    width: "auto",
+                                    minWidth: 170,
+                                    ...(it.unitId ? {} : { borderColor: "#B5480C" }),
+                                  }}
+                                  aria-label="Exemplar wählen"
+                                >
+                                  <option value="">
+                                    {selectableUnits(it, product).length === 0 ? "— kein Exemplar an Lager —" : "— Exemplar wählen —"}
+                                  </option>
+                                  {selectableUnits(it, product).map((u) => (
+                                    <option key={u.id} value={u.id}>
+                                      {u.serial}
+                                      {u.status === UNIT_STATUS.reserved ? " (reserviert)" : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            )}
+
+                            {kind === "product" && !serialTracked && (
+                              <label style={styles.itemMetaField}>
+                                <span style={styles.itemMetaLabel}>Menge</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                  value={it.quantity ?? "1"}
+                                  onChange={(e) => updateItem(it.id, "quantity", e.target.value)}
+                                  className="mono"
+                                  style={{ width: 62, textAlign: "right" }}
+                                  aria-label="Menge"
+                                />
                               </label>
                             )}
 
@@ -1389,10 +1751,14 @@ export default function ReceiptApp() {
                               </span>
                             </label>
 
-                            {disc > 0 && itemListPrice(it) > 0 && (
+                            {(disc > 0 || itemQuantity(it) !== 1) && itemListPrice(it) > 0 && (
                               <span style={styles.itemLineSummary}>
-                                <span style={styles.strikePrice} className="mono">CHF {chf(itemListPrice(it))}</span>
-                                <span style={styles.discountBadge}>−{formatPercent(disc)} %</span>
+                                {disc > 0 && (
+                                  <>
+                                    <span style={styles.strikePrice} className="mono">CHF {chf(itemListPrice(it))}</span>
+                                    <span style={styles.discountBadge}>−{formatPercent(disc)} %</span>
+                                  </>
+                                )}
                                 <span className="mono" style={{ fontWeight: 700 }}>CHF {chf(itemLineTotal(it))}</span>
                               </span>
                             )}
@@ -1509,6 +1875,14 @@ export default function ReceiptApp() {
                   />
                 </FieldGroup>
 
+                {stockErrors.length > 0 && (
+                  <div style={{ ...styles.hint, marginBottom: 12 }} role="alert">
+                    {stockErrors.map((m, i) => (
+                      <div key={i}>{m}</div>
+                    ))}
+                  </div>
+                )}
+
                 <button
                   onClick={createReceipt}
                   disabled={!canCreate}
@@ -1603,9 +1977,55 @@ export default function ReceiptApp() {
                 <h1 style={styles.h1}>Inventar</h1>
                 <div style={{ fontSize: 13, color: "#5B5F66", marginBottom: 20, maxWidth: 520 }}>
                   Artikel, die sich beim Erstellen einer Rechnung als Position „Produkt"
-                  auswählen lassen. Die Liste ist alphabetisch sortiert.
+                  auswählen lassen. Die Liste ist alphabetisch sortiert. Jeder Verkauf,
+                  Wareneingang und jede Korrektur wird als Lagerbewegung festgehalten.
                 </div>
 
+                <OptionGroup
+                  value={inventoryView}
+                  onChange={setInventoryView}
+                  ariaLabel="Bereich im Inventar"
+                  options={[
+                    ["articles", "Artikel"],
+                    ["goodsIn", "Wareneingang"],
+                    ["serials", "Seriennummer suchen"],
+                    ["movements", "Lagerbewegungen"],
+                  ]}
+                />
+                {persistError && inventoryView !== "articles" && <div style={styles.hint}>{persistError}</div>}
+
+                {inventoryView === "goodsIn" && (
+                  <div style={{ marginTop: 20 }}>
+                    <Wareneingang
+                      inventory={inventory}
+                      units={units}
+                      groups={inventoryGroups.filter((g) => g !== UNGROUPED_LABEL)}
+                      onBook={bookGoodsIn}
+                      onCreateProduct={addProduct}
+                    />
+                  </div>
+                )}
+
+                {inventoryView === "serials" && (
+                  <div style={{ marginTop: 20 }}>
+                    <SeriennummerSuche
+                      units={units}
+                      inventory={inventory}
+                      customerName={unitCustomerName}
+                      onOpenReceipt={openReceiptById}
+                    />
+                  </div>
+                )}
+
+                {inventoryView === "movements" && (
+                  <div style={{ marginTop: 20 }}>
+                    <Lagerbewegungen movementsByKey={movementsByKey} inventory={inventory} onOpenReceipt={openReceiptById} />
+                  </div>
+                )}
+
+                {inventoryView === "articles" && (
+                <>
+                <div style={{ height: 20 }} />
                 <FieldGroup label="Neuen Artikel erfassen">
                   <div style={styles.inventoryForm}>
                     <input
@@ -1629,16 +2049,18 @@ export default function ReceiptApp() {
                       onChange={(e) => setNewProduct({ ...newProduct, group: e.target.value })}
                       style={{ width: 150 }}
                     />
-                    <input
-                      placeholder="Stück"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={newProduct.stock}
-                      onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })}
-                      className="mono"
-                      style={{ width: 80, textAlign: "right" }}
-                    />
+                    {!newProduct.serialTracked && (
+                      <input
+                        placeholder="Stück"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={newProduct.stock}
+                        onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })}
+                        className="mono"
+                        style={{ width: 80, textAlign: "right" }}
+                      />
+                    )}
                     <div style={styles.amountWrap}>
                       <span className="mono" style={styles.chfLabel}>CHF</span>
                       <input
@@ -1652,14 +2074,27 @@ export default function ReceiptApp() {
                         style={{ width: 90, textAlign: "right" }}
                       />
                     </div>
+                    <label style={styles.checkLabel} title="Einzelstücke mit eigener Seriennummer, z. B. hochpreisige Queues">
+                      <input
+                        type="checkbox"
+                        checked={!!newProduct.serialTracked}
+                        onChange={(e) => setNewProduct({ ...newProduct, serialTracked: e.target.checked })}
+                      />
+                      Seriennummernpflichtig
+                    </label>
                     <button
-                      onClick={addProduct}
+                      onClick={() => addProduct()}
                       disabled={!newProduct.name.trim()}
                       style={{ ...styles.secondaryBtn, opacity: newProduct.name.trim() ? 1 : 0.4 }}
                     >
                       <Plus size={14} /> Hinzufügen
                     </button>
                   </div>
+                  {newProduct.serialTracked && (
+                    <div style={{ ...styles.muted, marginTop: 6 }}>
+                      Der Bestand ergibt sich aus den Exemplaren — Seriennummern danach im Wareneingang scannen.
+                    </div>
+                  )}
                 </FieldGroup>
 
                 <FieldGroup label="Excel">
@@ -1694,7 +2129,7 @@ export default function ReceiptApp() {
                     </button>
                     {!showImportHelp && (
                       <span style={{ fontSize: 12, color: "#8B8F96" }}>
-                        Spalten: Produktgruppe · Artikelnummer · Artikel-Name · Stückzahl verfügbar · Preis (CHF)
+                        Spalten: Produktgruppe · Artikelnummer · Artikel-Name · Stückzahl verfügbar · Preis (CHF) · Seriennummernpflichtig (optional)
                       </span>
                     )}
                   </div>
@@ -1770,6 +2205,7 @@ export default function ReceiptApp() {
                         <span style={{ width: 150 }}>Gruppe</span>
                         <span style={{ width: 80, textAlign: "right" }}>Stück</span>
                         <span style={{ width: 110, textAlign: "right" }}>Preis</span>
+                        <span style={{ width: 90, textAlign: "center" }}>S/N-Pflicht</span>
                         <span style={{ width: 34 }} />
                       </div>
                       {visibleInventory.length === 0 && (
@@ -1778,7 +2214,8 @@ export default function ReceiptApp() {
                         </div>
                       )}
                       {visibleInventory.map((p) => (
-                        <div key={p.id} style={styles.invRow}>
+                        <React.Fragment key={p.id}>
+                        <div style={styles.invRow}>
                           <input
                             value={p.articleNumber || ""}
                             onChange={(e) => updateProduct(p.id, "articleNumber", e.target.value)}
@@ -1800,16 +2237,7 @@ export default function ReceiptApp() {
                             style={{ width: 150 }}
                             aria-label="Produktgruppe"
                           />
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={p.stock ?? 0}
-                            onChange={(e) => updateProduct(p.id, "stock", e.target.value)}
-                            className="mono"
-                            style={{ width: 80, textAlign: "right" }}
-                            aria-label="Stückzahl verfügbar"
-                          />
+                          <StockCell product={p} units={units} onCommit={(value) => setProductStock(p.id, value)} />
                           <input
                             type="number"
                             min="0"
@@ -1820,8 +2248,32 @@ export default function ReceiptApp() {
                             style={{ width: 110, textAlign: "right" }}
                             aria-label="Preis"
                           />
+                          <span style={{ width: 90, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                            <input
+                              type="checkbox"
+                              checked={isSerialTracked(p)}
+                              onChange={(e) => setProductSerialTracked(p.id, e.target.checked)}
+                              aria-label="Seriennummernpflichtig"
+                            />
+                            {isSerialTracked(p) && (
+                              <button type="button" style={styles.linkBtn} onClick={() => toggleUnitList(p.id)}>
+                                {openUnitLists.has(p.id) ? "zu" : "Exemplare"}
+                              </button>
+                            )}
+                          </span>
                           <ConfirmDeleteButton label="" onConfirm={() => deleteProduct(p.id)} />
                         </div>
+                        {isSerialTracked(p) && openUnitLists.has(p.id) && (
+                          <UnitList
+                            product={p}
+                            units={units}
+                            customerName={unitCustomerName}
+                            onStatus={changeStatusOfUnit}
+                            onNote={updateUnitNote}
+                            onOpenReceipt={openReceiptById}
+                          />
+                        )}
+                        </React.Fragment>
                       ))}
                       <div style={styles.invFooter}>
                         {visibleInventory.length === inventory.length
@@ -1838,6 +2290,8 @@ export default function ReceiptApp() {
                     </>
                   )}
                 </div>
+                </>
+                )}
               </div>
             )}
 
@@ -2112,7 +2566,8 @@ export default function ReceiptApp() {
                 <Eyebrow>07 — Backup</Eyebrow>
                 <h1 style={styles.h1}>Backup & Datenübertragung</h1>
                 <div style={{ fontSize: 13, color: "#5B5F66", marginBottom: 24, maxWidth: 480 }}>
-                  Exportiert Firma, alle Kunden und alle Quittungen/Rechnungen als eine
+                  Exportiert Firma, alle Kunden, alle Quittungen/Rechnungen, das Inventar
+                  samt Exemplaren und das Protokoll der Lagerbewegungen als eine
                   einzelne Datei — z. B. um sie in die andere Qwui-Version zu übertragen
                   (Web ↔ Windows), oder einfach als Sicherungskopie in einem
                   Cloud-Speicher deiner Wahl (z. B. ProtonDrive, OneDrive) abzulegen.
@@ -2155,7 +2610,16 @@ export default function ReceiptApp() {
                     <div style={{ fontSize: 12, color: "#5B5F66", marginBottom: 4 }}>
                       {importPreview.customers?.length || 0} Kunden,{" "}
                       {importPreview.receipts?.length || 0} Quittungen/Rechnungen
+                      {Array.isArray(importPreview.serialUnits) && `, ${importPreview.serialUnits.length} Exemplare mit Seriennummer`}
                     </div>
+                    {!Array.isArray(importPreview.serialUnits) && (units.length > 0 || Object.keys(movementsByKey).length > 0) && (
+                      <div style={{ ...styles.hint, marginBottom: 10 }}>
+                        Diese Sicherung stammt aus einer Version vor 1.2.0 und enthält keine Exemplare
+                        und Lagerbewegungen. Die vorhandenen bleiben erhalten — Bestand, Exemplare und
+                        Quittungen passen danach unter Umständen nicht mehr zusammen. Bitte nach dem
+                        Import im Inventar prüfen.
+                      </div>
+                    )}
                     {importPreview.exportedAt && (
                       <div style={{ fontSize: 12, color: "#8B8F96", marginBottom: 12 }}>
                         Exportiert am {formatDateDE(importPreview.exportedAt.slice(0, 10))}
@@ -2217,6 +2681,13 @@ export default function ReceiptApp() {
               </button>
             </div>
           </div>
+          {stockWarnings.length > 0 && (
+            <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 12px" }} role="status">
+              {stockWarnings.map((m, i) => (
+                <div key={i}>{m}</div>
+              ))}
+            </div>
+          )}
           {!currentReceipt.customer.email && (
             <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 12px" }}>
               Für diesen Kunden ist keine E-Mail-Adresse hinterlegt — bitte manuell versenden.
@@ -2337,9 +2808,18 @@ function ReceiptDocument({ receipt }) {
               return (
                 <tr key={it.id} style={{ borderBottom: "1px solid #EDEEEF" }}>
                   <td style={{ padding: "6px 0", fontSize: 13 }}>
+                    {quantityPrefix(it)}
                     {it.description}
                     {isProduct && it.articleNumber && (
                       <span className="mono" style={styles.docArticleNr}> · {it.articleNumber}</span>
+                    )}
+                    {itemQuantity(it) !== 1 && (
+                      <span className="mono" style={styles.docArticleNr}> · à CHF {chf(itemUnitPrice(it))}</span>
+                    )}
+                    {it.serial && (
+                      <div className="mono" style={styles.docArticleNr}>
+                        S/N: {it.serial}
+                      </div>
                     )}
                   </td>
                   {/* Beim Produkt zusätzlich der durchgestrichene Listenpreis —
@@ -2784,6 +3264,7 @@ const styles = {
   },
   discountSummary: { marginTop: 12 },
   inventoryForm: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
+  checkLabel: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#5B5F66" },
   invHeaderRow: {
     display: "flex",
     gap: 8,

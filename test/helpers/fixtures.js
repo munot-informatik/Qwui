@@ -4,6 +4,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { receiptTotal } from "../../shared/items.js";
 
 const logoPath = fileURLToPath(new URL("../../src/assets/logo.png", import.meta.url));
 
@@ -60,13 +61,8 @@ export function makeReceipt({
   customer = makeCustomer(),
   ...rest
 } = {}) {
-  const total = round2(
-    items.reduce((sum, it) => {
-      const gross = Number(it.amount) || 0;
-      const disc = Math.min(100, Math.max(0, Number(it.discountPercent) || 0));
-      return sum + round2(gross - round2((gross * disc) / 100));
-    }, 0)
-  );
+  // Gleiche Rechnung wie im Formular (Menge × Stückpreis, dann Rabatt).
+  const total = receiptTotal(items);
   const netTotal = vatEnabled ? round2(total / (1 + VAT_RATE)) : total;
   return {
     number,

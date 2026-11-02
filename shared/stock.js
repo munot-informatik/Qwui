@@ -14,6 +14,9 @@
 // ctx: { now: ISO-Zeitstempel, source: "app" | "assistent", newId: () => string }
 
 import { UNIT_STATUS, isSellable } from "./serials.js";
+import { itemQuantity } from "./items.js";
+
+export { itemQuantity };
 
 export const MOVEMENT_TYPE = {
   goodsIn: "wareneingang",
@@ -31,7 +34,7 @@ export const MOVEMENT_TYPE_LABEL = {
 
 export const MOVEMENT_SOURCE = { app: "app", assistant: "assistent" };
 
-const MOVEMENTS_PREFIX = "stock-movements-";
+export const MOVEMENTS_PREFIX = "stock-movements-";
 
 // Ein Schlüssel pro Kalenderjahr: das Protokoll wächst nur nach hinten, und
 // D1 begrenzt die Grösse eines einzelnen Werts.
@@ -45,13 +48,6 @@ export function isMovementsKey(key) {
 
 export function isSerialTracked(product) {
   return product?.serialTracked === true;
-}
-
-// Menge einer Position. Positionen von vor 1.2.0 kennen keine Menge und
-// zählen als ein Stück.
-export function itemQuantity(item) {
-  const q = Number(item?.quantity);
-  return Number.isFinite(q) && q > 0 ? q : 1;
 }
 
 export function countInStock(units, productId) {
@@ -206,8 +202,13 @@ export function reverseReceipt({ inventory, units }, receipt, ctx) {
       : { productId: line.productId, articleNumber: "" };
 
     if (line.unitId) {
+      // Nur zurückbuchen, was diese Quittung noch hält. Ein inzwischen als
+      // Retoure erfasstes Exemplar ist schon zurück im Lager — ein zweites
+      // Storno würde es doppelt zählen.
+      const stillSold = nextUnits.some((u) => u.id === line.unitId && u.receiptId === receipt.id);
+      if (!stillSold) continue;
       nextUnits = nextUnits.map((u) =>
-        u.id === line.unitId && u.receiptId === receipt.id
+        u.id === line.unitId
           ? { ...u, status: UNIT_STATUS.inStock, receiptId: null, receiptNumber: null, customerId: null, soldAt: null }
           : u
       );
@@ -307,6 +308,62 @@ export function receiveGoods({ inventory, units }, entry, ctx, checkSerials) {
     movements: [movement(ctx, { ...productMovementFields(product), qty, type: MOVEMENT_TYPE.goodsIn, ref })],
     errors: [],
   };
+}
+
+// ---- Status eines Exemplars von Hand ändern ----
+//
+// - an Lager ↔ reserviert: keine Bewegung. Reservierte zählen nicht zum
+//   verfügbaren Bestand, bleiben beim Verkauf aber wählbar.
+// - verkauft → retourniert: Das Exemplar ist physisch zurück, deshalb ein
+//   Storno +1. Der Bezug zur Quittung wandert nach returnedFrom, damit ein
+//   späteres Löschen dieser Quittung nicht noch einmal zurückbucht.
+// - retourniert → an Lager: wieder verkäuflich, keine weitere Bewegung.
+// - "verkauft" setzt nur eine Quittung.
+const ALLOWED_STATUS_CHANGES = {
+  an_lager: ["reserviert"],
+  reserviert: ["an_lager"],
+  verkauft: ["retourniert"],
+  retourniert: ["an_lager"],
+};
+
+export function changeUnitStatus({ inventory, units }, unitId, status, ctx) {
+  const unit = (units || []).find((u) => u.id === unitId);
+  if (!unit) return { inventory, units, movements: [], errors: ["Exemplar nicht gefunden."] };
+  if (unit.status === status) return { inventory, units, movements: [], errors: [] };
+  if (!(ALLOWED_STATUS_CHANGES[unit.status] || []).includes(status)) {
+    return {
+      inventory,
+      units,
+      movements: [],
+      errors: [`Status «${unit.status}» lässt sich nicht von Hand auf «${status}» ändern.`],
+    };
+  }
+
+  const movements = [];
+  let changed = { ...unit, status };
+  if (unit.status === UNIT_STATUS.sold && status === UNIT_STATUS.returned) {
+    const product = (inventory || []).find((p) => p.id === unit.productId);
+    movements.push(
+      movement(ctx, {
+        productId: unit.productId,
+        articleNumber: product?.articleNumber || "",
+        serial: unit.serial,
+        qty: 1,
+        type: MOVEMENT_TYPE.reversal,
+        ref: { receiptId: unit.receiptId, receiptNumber: unit.receiptNumber, note: "Retoure" },
+      })
+    );
+    changed = {
+      ...changed,
+      returnedFrom: { receiptId: unit.receiptId, receiptNumber: unit.receiptNumber, customerId: unit.customerId, at: ctx.now },
+      receiptId: null,
+      receiptNumber: null,
+      customerId: null,
+    };
+  }
+
+  const nextUnits = units.map((u) => (u.id === unitId ? changed : u));
+  return { inventory: syncSerialStock(inventory, nextUnits), units: nextUnits, movements, errors: [] };
 }
 
 // ---- Inventurkorrektur ----
