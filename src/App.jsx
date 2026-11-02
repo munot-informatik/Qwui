@@ -314,7 +314,7 @@ export default function ReceiptApp() {
       }
       if (loadFailed) {
         setPersistError(
-          "Laden fehlgeschlagen — möglicherweise ist die Datenquelle gerade nicht erreichbar (z.B. Excel-Datei in Excel geöffnet)."
+          "Laden fehlgeschlagen — möglicherweise ist die Datenquelle gerade nicht erreichbar."
         );
       }
       setLoaded(true);

@@ -267,7 +267,7 @@ async function deserializeReceipt(json) {
 
 // ---- Kunden (Sheet "Kunden") ----
 
-export const readCustomersList = () =>
+export const readCustomersList = ({ persistFixes = true } = {}) =>
   withWriteLock(async () => {
     const wb = await loadWorkbook();
     const sheet = wb.getWorksheet(SHEET_CUSTOMERS);
@@ -303,7 +303,9 @@ export const readCustomersList = () =>
     // Self-Heal (fehlende/doppelte IDs) sofort persistieren, nicht erst beim
     // nächsten unabhängigen Save — sonst würde uid() bei jedem Neustart eine
     // andere ID vergeben und die Zeilen-Identität würde ständig wechseln.
-    if (changed) {
+    // Ausnahme: die Migration nach SQLite (persistFixes: false) — dort muss
+    // die Excel-Datei als Sicherung unverändert liegen bleiben.
+    if (changed && persistFixes) {
       await saveWorkbookAtomic(wb);
     }
 
@@ -339,7 +341,7 @@ export const writeCustomersList = (list) =>
 // ---- Inventar (Sheet "Inventar") ----
 // Direkt als Tabelle lesbar und von Hand pflegbar, wie die Kundenliste.
 
-export const readInventoryList = () =>
+export const readInventoryList = ({ persistFixes = true } = {}) =>
   withWriteLock(async () => {
     const wb = await loadWorkbook();
     const sheet = wb.getWorksheet(SHEET_INVENTORY);
@@ -369,7 +371,7 @@ export const readInventoryList = () =>
       });
     }
 
-    if (changed) {
+    if (changed && persistFixes) {
       await saveWorkbookAtomic(wb);
     }
 

@@ -60,6 +60,12 @@ export function getWorkbookPath() {
   return join(getDataDir(), "Qwui-Daten.xlsx");
 }
 
+// Ab 1.2.0 die eigentliche Datenbank (siehe sqliteStore.js). Die Excel-Datei
+// daneben bleibt aus 1.1 als Sicherung liegen.
+export function getDatabasePath() {
+  return join(getDataDir(), "qwui.db");
+}
+
 export function getCompanyPath() {
   return join(getDataDir(), "firma.json");
 }

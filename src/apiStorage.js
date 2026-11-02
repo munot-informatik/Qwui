@@ -43,6 +43,24 @@ async function rawSet(key, value, shared) {
   return res.json();
 }
 
+// Logos einmal separat ablegen und in den Quittungen nur referenzieren —
+// sonst wüchse dieser eine Wert um ~100 KB pro Quittung. Die Logos selbst
+// werden dabei sofort geschrieben; das ist unkritisch, da sie unter ihrem
+// Inhalts-Hash liegen und ein überzähliges Logo nichts kaputt macht.
+async function slimValue(key, value) {
+  if (key !== RECEIPTS_KEY) return value;
+  let receipts;
+  try {
+    receipts = JSON.parse(value);
+  } catch (e) {
+    return value;
+  }
+  const slim = await externalizeLogos(receipts, (logoKey, dataUrl) =>
+    rawSet(logoKey, dataUrl, false)
+  );
+  return JSON.stringify(slim);
+}
+
 export const storageShim = {
   async get(key, shared = false) {
     const data = await rawGet(key, shared);
@@ -61,20 +79,26 @@ export const storageShim = {
   },
 
   async set(key, value, shared = false) {
-    if (key !== RECEIPTS_KEY) return rawSet(key, value, shared);
+    return rawSet(key, await slimValue(key, value), shared);
+  },
 
-    // Logos einmal separat ablegen und in den Quittungen nur referenzieren —
-    // sonst wüchse dieser eine Wert um ~100 KB pro Quittung.
-    let receipts;
-    try {
-      receipts = JSON.parse(value);
-    } catch (e) {
-      return rawSet(key, value, shared);
+  // Mehrere Schlüssel in einem Schritt (D1-Batch, alles oder nichts) — z. B.
+  // Quittung, Exemplare, Inventar und Lagerbewegungen eines Verkaufs.
+  // entries: [{ key, value }]
+  async setMany(entries, shared = false) {
+    const prepared = [];
+    for (const { key, value } of entries) {
+      prepared.push({ key, value: await slimValue(key, value), shared });
     }
-    const slim = await externalizeLogos(receipts, (logoKey, dataUrl) =>
-      rawSet(logoKey, dataUrl, false)
-    );
-    return rawSet(key, JSON.stringify(slim), shared);
+    const res = await fetch(`/api/storage-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries: prepared }),
+    });
+    if (!res.ok) {
+      throw new Error(`storage.setMany fehlgeschlagen: ${res.status}`);
+    }
+    return res.json();
   },
 
   async delete(key, shared = false) {

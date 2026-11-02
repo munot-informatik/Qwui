@@ -13,6 +13,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("qwuiDesktopStorage", {
   get: (key, shared = false) => ipcRenderer.invoke("storage:get", key, !!shared),
   set: (key, value, shared = false) => ipcRenderer.invoke("storage:set", key, value, !!shared),
+  setMany: (entries, shared = false) => ipcRenderer.invoke("storage:setMany", entries, !!shared),
   delete: (key, shared = false) => ipcRenderer.invoke("storage:delete", key, !!shared),
   list: (prefix = "", shared = false) => ipcRenderer.invoke("storage:list", prefix, !!shared),
 });

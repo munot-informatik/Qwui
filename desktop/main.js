@@ -1,32 +1,35 @@
 // Electron-Hauptprozess der Qwui-Desktop-Version. Lädt den bestehenden
 // React/Vite-Build (dist/index.html) unverändert und stellt über IPC eine
-// lokale Excel-/JSON-Datenbank bereit — die gesamte UI/Business-Logik bleibt
+// lokale SQLite-Datenbank bereit — die gesamte UI/Business-Logik bleibt
 // dieselbe wie in der Web-App, nur der Speicher-Adapter ist ausgetauscht
 // (siehe src/electronStorage.js, src/main.jsx).
+//
+// Bis 1.1 lagen die Daten in Qwui-Daten.xlsx. Beim ersten Start mit 1.2.0
+// werden sie einmalig übernommen (migrateExcel.js); die Excel-Datei bleibt
+// unverändert als Sicherung liegen.
 
-import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getDataDir, getWorkbookPath } from "./dataDir.js";
-import { readCompany, writeCompany } from "./companyStore.js";
-import {
-  readCustomersList,
-  writeCustomersList,
-  readReceiptsList,
-  writeReceiptsList,
-  readInventoryList,
-  writeInventoryList,
-} from "./excelStore.js";
+import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { getDataDir, getWorkbookPath, getCompanyPath, getDatabasePath } from "./dataDir.js";
+import { readCompany } from "./companyStore.js";
+import { readCustomersList, readReceiptsList, readInventoryList } from "./excelStore.js";
+import { storeLogo, loadLogo } from "./logoCache.js";
+import { openStore } from "./sqliteStore.js";
+import { migrateFromExcel } from "./migrateExcel.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Verhindert, dass zwei .exe-Instanzen gleichzeitig auf dieselbe Excel-Datei
+// Verhindert, dass zwei .exe-Instanzen gleichzeitig auf dieselbe Datenbank
 // schreiben — die zweite Instanz fokussiert nur das bestehende Fenster.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   let mainWindow = null;
+  let store = null;
 
   app.on("second-instance", () => {
     if (mainWindow) {
@@ -113,10 +116,16 @@ if (!gotLock) {
             label: "Datenordner öffnen",
             click: () => shell.openPath(getDataDir()),
           },
-          {
-            label: "Excel-Datei öffnen",
-            click: () => shell.openPath(getWorkbookPath()),
-          },
+          // Nur noch die Sicherung aus Qwui 1.1 — die Daten selbst liegen ab
+          // 1.2.0 in qwui.db.
+          ...(existsSync(getWorkbookPath())
+            ? [
+                {
+                  label: "Excel-Sicherung aus Version 1.1 öffnen",
+                  click: () => shell.openPath(getWorkbookPath()),
+                },
+              ]
+            : []),
           { type: "separator" },
           { role: "reload" },
           { type: "separator" },
@@ -128,62 +137,80 @@ if (!gotLock) {
   }
 
   // ---- IPC: spiegelt exakt das window.storage-Interface der Web-App ----
-  // (get/set/delete/list, siehe src/apiStorage.js). "shared" wird nur für
-  // Signatur-Kompatibilität akzeptiert und ignoriert — die Desktop-Version
-  // kennt keine geteilten/privaten Bereiche, alles ist lokal.
+  // (get/set/setMany/delete/list, siehe src/apiStorage.js). "shared" wird nur
+  // für Signatur-Kompatibilität akzeptiert und ignoriert — die
+  // Desktop-Version kennt keine geteilten/privaten Bereiche, alles ist lokal.
 
   ipcMain.handle("storage:get", async (_event, key, shared) => {
-    if (key === "company-info") {
-      const company = await readCompany();
-      return company ? { key, value: JSON.stringify(company), shared } : null;
-    }
-    if (key === "customers-list") {
-      const list = await readCustomersList();
-      return { key, value: JSON.stringify(list), shared };
-    }
-    if (key === "receipts-list") {
-      const list = await readReceiptsList();
-      return { key, value: JSON.stringify(list), shared };
-    }
-    if (key === "inventory-list") {
-      const list = await readInventoryList();
-      return { key, value: JSON.stringify(list), shared };
-    }
-    return null;
+    const row = await store.get(key);
+    return row ? { ...row, shared } : null;
   });
 
   ipcMain.handle("storage:set", async (_event, key, value, shared) => {
-    if (key === "company-info") {
-      await writeCompany(JSON.parse(value));
-    } else if (key === "customers-list") {
-      await writeCustomersList(JSON.parse(value));
-    } else if (key === "receipts-list") {
-      await writeReceiptsList(JSON.parse(value));
-    } else if (key === "inventory-list") {
-      await writeInventoryList(JSON.parse(value));
-    }
+    await store.set(key, value);
     return { key, value, shared };
   });
 
+  ipcMain.handle("storage:setMany", async (_event, entries, shared) => {
+    const result = await store.setMany(entries);
+    return { ...result, shared };
+  });
+
   ipcMain.handle("storage:delete", async (_event, key, shared) => {
-    if (key === "customers-list") await writeCustomersList([]);
-    else if (key === "receipts-list") await writeReceiptsList([]);
-    return { key, deleted: true, shared };
+    const result = await store.delete(key);
+    return { ...result, shared };
   });
 
   ipcMain.handle("storage:list", async (_event, prefix, shared) => {
-    const keys = ["company-info", "customers-list", "receipts-list", "inventory-list"].filter((k) =>
-      k.startsWith(prefix || "")
-    );
-    return { keys, prefix, shared };
+    const result = await store.list(prefix || "");
+    return { ...result, shared };
   });
 
-  app.whenReady().then(() => {
+  // Datenbank öffnen und Altdaten übernehmen, BEVOR das Fenster lädt — sonst
+  // sähe die App beim ersten Start mit 1.2.0 kurz eine leere Datenbank.
+  async function openDatabase() {
+    store = openStore(getDatabasePath(), { storeLogo, loadLogo });
+    const result = await migrateFromExcel(
+      store,
+      {
+        workbookExists: existsSync(getWorkbookPath()),
+        companyExists: existsSync(getCompanyPath()),
+        readCompany,
+        readCustomers: readCustomersList,
+        readReceipts: readReceiptsList,
+        readInventory: readInventoryList,
+      },
+      { now: new Date().toISOString(), newId: () => randomUUID().slice(0, 8) }
+    );
+    if (result.migrated) {
+      console.log("Daten aus Qwui-Daten.xlsx übernommen", result.meta.counts);
+    }
+  }
+
+  app.whenReady().then(async () => {
+    try {
+      await openDatabase();
+    } catch (e) {
+      // Ohne Datenbank wäre jede Eingabe verloren — lieber klar abbrechen
+      // als eine App zeigen, die scheinbar speichert.
+      console.error("Datenbank konnte nicht geöffnet werden", e);
+      dialog.showErrorBox(
+        "Qwui kann die Daten nicht öffnen",
+        `Die Datenbank in ${getDataDir()} konnte nicht geöffnet oder die Excel-Datei ` +
+          `aus Version 1.1 nicht übernommen werden. Die Excel-Datei ist unverändert.\n\n${e.message}`
+      );
+      app.quit();
+      return;
+    }
     createWindow();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+  });
+
+  app.on("will-quit", () => {
+    if (store) store.close();
   });
 
   app.on("window-all-closed", () => {

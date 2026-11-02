@@ -16,6 +16,11 @@ export const storageShim = {
     return window.qwuiDesktopStorage.set(key, value, shared);
   },
 
+  // entries: [{ key, value }] — im Hauptprozess eine SQLite-Transaktion.
+  async setMany(entries, shared = false) {
+    return window.qwuiDesktopStorage.setMany(entries, shared);
+  },
+
   async delete(key, shared = false) {
     return window.qwuiDesktopStorage.delete(key, shared);
   },

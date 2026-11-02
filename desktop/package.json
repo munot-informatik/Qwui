@@ -2,7 +2,7 @@
   "name": "qwui-desktop",
   "productName": "Qwui",
   "version": "1.1.0",
-  "description": "Qwui Windows-Desktop-Version (Electron, lokale Excel-Datenbank)",
+  "description": "Qwui Windows-Desktop-Version (Electron, lokale SQLite-Datenbank)",
   "private": true,
   "type": "module",
   "main": "main.js",
@@ -17,8 +17,8 @@
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.10.1",
+    "electron-builder": "^26.18.0"
   },
   "build": {
     "appId": "ch.munot-informatik.qwui",
@@ -32,6 +32,8 @@
       "dataDir.js",
       "companyStore.js",
       "excelStore.js",
+      "sqliteStore.js",
+      "migrateExcel.js",
       "logoCache.js",
       "dist/**/*",
       "package.json"
