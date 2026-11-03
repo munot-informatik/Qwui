@@ -66,6 +66,11 @@ export function getDatabasePath() {
   return join(getDataDir(), "qwui.db");
 }
 
+// Verschlüsselte Passwörter (siehe secrets.js) — gehört nicht in Backups.
+export function getSecretsPath() {
+  return join(getDataDir(), "geheim.bin");
+}
+
 export function getCompanyPath() {
   return join(getDataDir(), "firma.json");
 }

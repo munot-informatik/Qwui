@@ -30,6 +30,17 @@ import {
 } from "../shared/stock.js";
 import { UNIT_STATUS, isSellable, checkNewSerials } from "../shared/serials.js";
 import { StockCell, UnitList, Wareneingang, SeriennummerSuche, Lagerbewegungen } from "./Lager.jsx";
+import EmailEinstellungen from "./EmailEinstellungen.jsx";
+import {
+  hasEmailConsent,
+  grantEmailConsent,
+  withoutUnconsentedEmail,
+  hasLegacyEmailWithoutConsent,
+  isValidEmail,
+} from "../shared/consent.js";
+
+// Direkter Versand per SMTP gibt es nur in der Windows-Version (Preload).
+const desktopMail = typeof window !== "undefined" ? window.qwuiDesktop?.mail || null : null;
 import {
   Plus,
   Trash2,
@@ -155,6 +166,8 @@ const emptyPerson = {
   city: "",
   email: "",
   phone: "",
+  // Einverständnis «E-Mail-Beleg», siehe shared/consent.js
+  emailConsent: null,
 };
 
 // Liefert Adresszeilen für die Anzeige: bevorzugt die neuen strukturierten
@@ -232,6 +245,12 @@ function nextReceiptNumber(receipts) {
   return String(maxNumber + 1).padStart(4, "0");
 }
 
+function formatDateTimeDE(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 function formatDateDE(iso) {
   if (!iso) return "";
   const [y, m, d] = iso.split("-");
@@ -294,6 +313,13 @@ export default function ReceiptApp() {
   const [vatEnabled, setVatEnabled] = useState(false);
   const [qrBillEnabled, setQrBillEnabled] = useState(false);
   const [paymentTermDays, setPaymentTermDays] = useState(DEFAULT_PAYMENT_TERM_DAYS);
+  // Zustellung nach dem Erstellen (nur Windows): per E-Mail und/oder Drucken.
+  // null = Vorgabe aus dem Kunden (E-Mail, sofern eine Adresse bekannt ist).
+  const [deliveryMail, setDeliveryMail] = useState(null);
+  const [deliveryTo, setDeliveryTo] = useState(null);
+  const [deliveryPrint, setDeliveryPrint] = useState(false);
+  // Versand aus der Vorschau: { state: "idle" | "form" | "sending" | "sent" | "error", to, error }
+  const [mailState, setMailState] = useState({ state: "idle", to: "", error: "" });
 
   const [newCustomer, setNewCustomer] = useState(emptyPerson);
 
@@ -575,20 +601,45 @@ export default function ReceiptApp() {
     setImportError("");
   }
 
+  const [customerNotice, setCustomerNotice] = useState("");
+
+  // Ohne Einverständnis «E-Mail-Beleg» wird die Adresse nicht gespeichert —
+  // die Meldung sagt das, statt sie still zu verwerfen.
+  function noticeIfEmailDropped(person) {
+    setCustomerNotice(
+      person.email && !hasEmailConsent(person)
+        ? "Die E-Mail-Adresse wurde ohne Einverständnis «E-Mail-Beleg» nicht gespeichert."
+        : ""
+    );
+  }
+
   async function addCustomer() {
     if (!newCustomer.name.trim()) return;
-    const next = [...customers, { ...newCustomer, id: uid() }];
+    noticeIfEmailDropped(newCustomer);
+    const next = [...customers, { ...withoutUnconsentedEmail(newCustomer), id: uid() }];
     await persist(KEYS.customers, next, setCustomers);
     setNewCustomer(emptyPerson);
   }
 
   async function saveManualCustomerToList() {
     if (!manualCustomer.name.trim()) return;
-    const newEntry = { ...manualCustomer, id: uid() };
+    noticeIfEmailDropped(manualCustomer);
+    const newEntry = { ...withoutUnconsentedEmail(manualCustomer), id: uid() };
     const next = [...customers, newEntry];
     await persist(KEYS.customers, next, setCustomers);
     setSelectedCustomerId(newEntry.id);
+    // Die eingetippte Adresse bleibt für den Versand dieser Quittung stehen.
+    if (!hasEmailConsent(manualCustomer) && manualCustomer.email) setDeliveryTo(manualCustomer.email);
     setManualCustomer(emptyPerson);
+  }
+
+  // Für Kunden aus Version 1.1: Einverständnis nachträglich erfassen oder die
+  // gespeicherte Adresse entfernen.
+  async function setCustomerConsent(id, given) {
+    const next = customers.map((c) =>
+      c.id !== id ? c : given ? grantEmailConsent(c, todayISO()) : { ...c, email: "", emailConsent: null }
+    );
+    await persist(KEYS.customers, next, setCustomers);
   }
 
   async function deleteCustomer(id) {
@@ -1047,6 +1098,9 @@ export default function ReceiptApp() {
     setPaymentTermDays(DEFAULT_PAYMENT_TERM_DAYS);
     setStockErrors([]);
     setStockWarnings([]);
+    setDeliveryMail(null);
+    setDeliveryTo(null);
+    setDeliveryPrint(false);
   }
 
   function getActiveCustomer() {
@@ -1058,6 +1112,8 @@ export default function ReceiptApp() {
   }
 
   const activeCustomer = getActiveCustomer();
+  const deliveryAddress = (deliveryTo ?? activeCustomer.email ?? "").trim();
+  const wantsMail = !!desktopMail && (deliveryMail ?? !!deliveryAddress);
   const validItems = items.filter((it) => it.description.trim() && Number(it.amount) > 0);
   const canCreate = activeCustomer.name.trim() && validItems.length > 0;
   const needsAddress = total >= 400;
@@ -1067,12 +1123,13 @@ export default function ReceiptApp() {
   // landet. So lässt sich jedes verkaufte Exemplar einem Kunden zuordnen, und
   // der Assistent bekommt nur diese ID statt Name und Adresse.
   function receiptCustomer(existing) {
+    // Die E-Mail-Adresse steht nur mit Einverständnis auf dem Beleg.
     if (selectedCustomerId) {
       const c = customers.find((x) => x.id === selectedCustomerId);
-      if (c) return { ...c };
+      if (c) return withoutUnconsentedEmail({ ...c });
     }
     const keepId = existing && !customers.some((c) => c.id === existing.customer?.id) ? existing.customer?.id : "";
-    return { ...activeCustomer, id: keepId || `m-${uid()}` };
+    return withoutUnconsentedEmail({ ...activeCustomer, id: keepId || `m-${uid()}` });
   }
 
   // Positionen so speichern, wie sie auf dem Beleg stehen: Menge als Zahl,
@@ -1183,6 +1240,16 @@ export default function ReceiptApp() {
     });
     setCurrentReceipt(receipt);
     setMode("preview");
+    await deliverAfterCreate(receipt, next);
+  }
+
+  // Zustellung, die im Formular gewählt wurde (nur Windows).
+  async function deliverAfterCreate(receipt, list) {
+    setMailState({ state: "idle", to: "", error: "" });
+    const print = !!desktopMail && deliveryPrint;
+    if (wantsMail && deliveryAddress) await sendReceiptByMail(receipt, deliveryAddress, list);
+    // Drucken erst, wenn die Vorschau steht — gedruckt wird die Bildschirmansicht.
+    if (print) setTimeout(printReceipt, 400);
   }
 
   function startEditReceipt(r) {
@@ -1257,39 +1324,86 @@ export default function ReceiptApp() {
 
   function openReceipt(r) {
     setStockWarnings([]);
+    setMailState({ state: "idle", to: "", error: "" });
     setCurrentReceipt(r);
     setMode("preview");
   }
 
   function backToForm() {
+    setMailState({ state: "idle", to: "", error: "" });
     setMode("form");
     setCurrentReceipt(null);
     setEditingReceiptId(null);
     resetForm();
   }
 
+  // Betreff und Text der E-Mail. attached: true beim direkten Versand mit
+  // PDF-Anhang (Windows), false für mailto:, wo der Anhang von Hand kommt.
+  function mailContent(receipt, attached) {
+    const word = documentWord(receipt);
+    const lines = [
+      `Guten Tag ${receipt.customer.name}`,
+      "",
+      `${attached ? "Im Anhang" : "Anbei"} erhalten Sie die ${word} Nr. ${receipt.number} vom ${formatDateDE(
+        receipt.date
+      )} über CHF ${chf(receipt.total)}.`,
+      "",
+      ...(attached
+        ? []
+        : [
+            `Bitte fügen Sie die PDF-${word} dieser E-Mail als Anhang bei`,
+            "(Button „Drucken / Als PDF speichern“ → als PDF sichern → hier anhängen).",
+            "",
+          ]),
+      "Freundliche Grüsse",
+      receipt.company.name || "",
+    ];
+    return {
+      subject: `${word} Nr. ${receipt.number} – ${receipt.company.name || ""}`,
+      text: lines.join("\n"),
+    };
+  }
+
   function sendMail() {
     if (!currentReceipt) return;
-    const word = documentWord(currentReceipt);
     const to = currentReceipt.customer.email || "";
-    const subject = encodeURIComponent(
-      `${word} Nr. ${currentReceipt.number} – ${currentReceipt.company.name || ""}`
-    );
-    const bodyLines = [
-      `Guten Tag ${currentReceipt.customer.name}`,
-      "",
-      `Anbei erhalten Sie die ${word} Nr. ${currentReceipt.number} vom ${formatDateDE(
-        currentReceipt.date
-      )} über CHF ${chf(currentReceipt.total)}.`,
-      "",
-      `Bitte fügen Sie die PDF-${word} dieser E-Mail als Anhang bei`,
-      "(Button „Drucken / Als PDF speichern“ → als PDF sichern → hier anhängen).",
-      "",
-      "Freundliche Grüsse",
-      currentReceipt.company.name || "",
-    ];
-    const body = encodeURIComponent(bodyLines.join("\n"));
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+    const { subject, text } = mailContent(currentReceipt, false);
+    window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+  }
+
+  // Versendet die Quittung direkt per SMTP (Windows) und hält das Ergebnis an
+  // der Quittung fest — ohne die Adresse, die ohne Einverständnis nirgends
+  // gespeichert werden darf. list: die Quittungsliste, in der die Quittung
+  // steht (direkt nach dem Erstellen ist der State noch nicht nachgeführt).
+  async function sendReceiptByMail(receipt, to, list = receipts) {
+    // Ein Tippfehler in der Adresse ist kein Versandversuch — er soll einen
+    // früheren erfolgreichen Versand an der Quittung nicht überschreiben.
+    if (!isValidEmail(to)) {
+      setMailState({ state: "error", to, error: "Die E-Mail-Adresse ist ungültig." });
+      return;
+    }
+    setMailState({ state: "sending", to, error: "" });
+    let result;
+    try {
+      const pdf = await buildReceiptPdfBytes(receipt);
+      const { subject, text } = mailContent(receipt, true);
+      result = await desktopMail.sendReceipt({
+        to,
+        subject,
+        text,
+        filename: `${documentWord(receipt)}_${receipt.number}.pdf`,
+        pdf,
+      });
+    } catch (e) {
+      result = { ok: false, error: e.message || String(e) };
+    }
+    const emailDelivery = result.ok
+      ? { status: "gesendet", at: new Date().toISOString() }
+      : { status: "fehlgeschlagen", at: new Date().toISOString(), error: result.error };
+    const updated = { ...receipt, emailDelivery };
+    await persist(KEYS.receipts, list.map((r) => (r.id === receipt.id ? updated : r)), setReceipts);
+    setCurrentReceipt((cur) => (cur && cur.id === receipt.id ? updated : cur));
+    setMailState(result.ok ? { state: "sent", to, error: "" } : { state: "error", to, error: result.error });
   }
 
   function printReceipt() {
@@ -1379,7 +1493,8 @@ export default function ReceiptApp() {
       `Datum: ${formatDateDE(receipt.date)}`,
       `Empfänger: ${receipt.customer.name}`,
       "",
-      ...receipt.items.map((it) => `${it.description}: CHF ${chf(it.amount)}`),
+      // Verrechneter Betrag (Menge und Rabatt eingerechnet), wie auf dem Beleg.
+      ...receipt.items.map((it) => `${quantityPrefix(it)}${it.description}: CHF ${chf(itemLineTotal(it))}`),
       "",
     ];
     if (receipt.vatEnabled) {
@@ -1595,6 +1710,7 @@ export default function ReceiptApp() {
                         value={manualCustomer.email}
                         onChange={(e) => setManualCustomer({ ...manualCustomer, email: e.target.value })}
                       />
+                      {manualCustomer.email && <ConsentCheckbox person={manualCustomer} onChange={setManualCustomer} />}
                       <input
                         placeholder="Telefon (für WhatsApp, z.B. +41 79 123 45 67)"
                         value={manualCustomer.phone}
@@ -1875,6 +1991,35 @@ export default function ReceiptApp() {
                   />
                 </FieldGroup>
 
+                {desktopMail && !editingReceiptId && (
+                  <FieldGroup label="Nach dem Erstellen">
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <label style={styles.checkLabel}>
+                        <input type="checkbox" checked={wantsMail} onChange={(e) => setDeliveryMail(e.target.checked)} />
+                        Per E-Mail senden (PDF im Anhang)
+                      </label>
+                      {wantsMail && (
+                        <input
+                          placeholder="E-Mail-Adresse für diesen Versand"
+                          value={deliveryTo ?? activeCustomer.email ?? ""}
+                          onChange={(e) => setDeliveryTo(e.target.value)}
+                          style={{ maxWidth: 360 }}
+                          aria-label="E-Mail-Adresse für den Versand"
+                        />
+                      )}
+                      {wantsMail && !hasEmailConsent(activeCustomer) && (
+                        <div style={styles.muted}>
+                          Ohne Einverständnis «E-Mail-Beleg» wird die Adresse nur für diesen Versand verwendet und nicht gespeichert.
+                        </div>
+                      )}
+                      <label style={styles.checkLabel}>
+                        <input type="checkbox" checked={deliveryPrint} onChange={(e) => setDeliveryPrint(e.target.checked)} />
+                        Drucken
+                      </label>
+                    </div>
+                  </FieldGroup>
+                )}
+
                 {stockErrors.length > 0 && (
                   <div style={{ ...styles.hint, marginBottom: 12 }} role="alert">
                     {stockErrors.map((m, i) => (
@@ -1937,6 +2082,7 @@ export default function ReceiptApp() {
                     value={newCustomer.email}
                     onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
                   />
+                  {newCustomer.email && <ConsentCheckbox person={newCustomer} onChange={setNewCustomer} />}
                   <input
                     placeholder="Telefon (für WhatsApp, z.B. +41 79 123 45 67)"
                     value={newCustomer.phone}
@@ -1945,6 +2091,7 @@ export default function ReceiptApp() {
                   <button onClick={addCustomer} style={styles.secondaryBtn}>
                     <Plus size={14} /> Kunde speichern
                   </button>
+                  {customerNotice && <div style={styles.hint}>{customerNotice}</div>}
                 </div>
 
                 <div style={{ marginTop: 24 }}>
@@ -1959,6 +2106,21 @@ export default function ReceiptApp() {
                             <div style={styles.muted} key={i}>{l}</div>
                           ))}
                           <div style={styles.muted}>{c.email}</div>
+                          {hasEmailConsent(c) && c.email && (
+                            <div style={styles.muted}>Einverständnis E-Mail-Beleg seit {formatDateDE(c.emailConsent.at)}</div>
+                          )}
+                          {hasLegacyEmailWithoutConsent(c) && (
+                            <div style={{ ...styles.muted, color: "#B5480C" }}>
+                              Einverständnis E-Mail-Beleg fehlt —{" "}
+                              <button type="button" style={styles.linkBtn} onClick={() => setCustomerConsent(c.id, true)}>
+                                erfassen
+                              </button>{" "}
+                              oder{" "}
+                              <button type="button" style={styles.linkBtn} onClick={() => setCustomerConsent(c.id, false)}>
+                                Adresse entfernen
+                              </button>
+                            </div>
+                          )}
                           {c.phone && <div style={styles.muted}>{c.phone}</div>}
                         </div>
                         <button onClick={() => deleteCustomer(c.id)} style={styles.iconBtn}>
@@ -2519,6 +2681,9 @@ export default function ReceiptApp() {
                     </button>
                   </div>
                 </div>
+
+                {/* Nur in der Windows-Version vorhanden (window.qwuiDesktop). */}
+                <EmailEinstellungen />
               </div>
             )}
 
@@ -2538,6 +2703,7 @@ export default function ReceiptApp() {
                         <div style={styles.muted}>
                           {formatDateDE(r.date)} · CHF {chf(r.total)}
                           {r.editedAt ? " · bearbeitet" : ""}
+                          {r.emailDelivery ? ` · E-Mail ${r.emailDelivery.status}` : ""}
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
@@ -2668,14 +2834,24 @@ export default function ReceiptApp() {
                   <Share2 size={14} /> {sharing ? "Bereite vor…" : "Teilen"}
                 </button>
               )}
-              <button
-                onClick={sendMail}
-                style={styles.primaryBtnSmall}
-                disabled={!currentReceipt.customer.email}
-                title={!currentReceipt.customer.email ? "Keine E-Mail-Adresse hinterlegt" : ""}
-              >
-                <Mail size={14} /> Per E-Mail senden
-              </button>
+              {desktopMail ? (
+                <button
+                  onClick={() => setMailState({ state: "form", to: currentReceipt.customer.email || "", error: "" })}
+                  style={styles.primaryBtnSmall}
+                  disabled={mailState.state === "sending"}
+                >
+                  <Mail size={14} /> {mailState.state === "sending" ? "Sende…" : "Per E-Mail senden"}
+                </button>
+              ) : (
+                <button
+                  onClick={sendMail}
+                  style={styles.primaryBtnSmall}
+                  disabled={!currentReceipt.customer.email}
+                  title={!currentReceipt.customer.email ? "Keine E-Mail-Adresse hinterlegt" : ""}
+                >
+                  <Mail size={14} /> Per E-Mail senden
+                </button>
+              )}
               <button onClick={sendWhatsApp} style={styles.whatsappBtn}>
                 <MessageCircle size={14} /> Per WhatsApp senden
               </button>
@@ -2688,7 +2864,42 @@ export default function ReceiptApp() {
               ))}
             </div>
           )}
-          {!currentReceipt.customer.email && (
+          {desktopMail && (mailState.state !== "idle" || currentReceipt.emailDelivery) && (
+            <div className="no-print" style={styles.mailBox}>
+              {(mailState.state === "form" || mailState.state === "error") && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <input
+                    value={mailState.to}
+                    onChange={(e) => setMailState({ ...mailState, to: e.target.value })}
+                    placeholder="E-Mail-Adresse"
+                    style={{ flex: 1, minWidth: 220 }}
+                    aria-label="Empfänger"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => sendReceiptByMail(currentReceipt, mailState.to.trim())}
+                    disabled={!mailState.to.trim()}
+                    style={{ ...styles.primaryBtnSmall, opacity: mailState.to.trim() ? 1 : 0.4 }}
+                  >
+                    <Mail size={14} /> Senden
+                  </button>
+                  <button onClick={() => setMailState({ state: "idle", to: "", error: "" })} style={styles.linkBtn}>
+                    Abbrechen
+                  </button>
+                </div>
+              )}
+              {mailState.state === "sending" && <div style={styles.muted}>Sende an {mailState.to}…</div>}
+              {mailState.state === "sent" && <div style={styles.savedMsg}>Gesendet an {mailState.to}.</div>}
+              {mailState.state === "error" && <div style={styles.hint}>Versand fehlgeschlagen: {mailState.error}</div>}
+              {mailState.state === "idle" && currentReceipt.emailDelivery && (
+                <div style={currentReceipt.emailDelivery.status === "gesendet" ? styles.savedMsg : styles.hint}>
+                  E-Mail {currentReceipt.emailDelivery.status} am {formatDateTimeDE(currentReceipt.emailDelivery.at)}
+                  {currentReceipt.emailDelivery.error ? ` — ${currentReceipt.emailDelivery.error}` : ""}
+                </div>
+              )}
+            </div>
+          )}
+          {!desktopMail && !currentReceipt.customer.email && (
             <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 12px" }}>
               Für diesen Kunden ist keine E-Mail-Adresse hinterlegt — bitte manuell versenden.
             </div>
@@ -2703,12 +2914,14 @@ export default function ReceiptApp() {
             Tipp für eine saubere PDF ohne Titel/URL am Seitenrand: Im Druckdialog unten auf
             „Mehr Einstellungen" klicken und „Kopf- und Fusszeilen" abwählen.
           </div>
+          {!desktopMail && (
           <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 8px" }}>
             Hinweis: „Per E-Mail senden" öffnet dein E-Mail-Programm mit vorausgefülltem Text. Da Browser aus
             Sicherheitsgründen keine automatischen Anhänge erlauben, lade die Quittung zuerst über den Button
             „PDF herunterladen" herunter und hänge sie manuell an
             {canShareFiles ? ' — oder nutze stattdessen „Teilen" (siehe unten).' : "."}
           </div>
+          )}
           <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 20px" }}>
             Hinweis: „Per WhatsApp senden" öffnet WhatsApp (App oder WhatsApp Web) mit fertig
             eingetragenem Text — als reine Nachricht, ohne PDF-Anhang. Welche WhatsApp-Version sich
@@ -3106,6 +3319,22 @@ function LogoLayoutPreview({ layout, align, size, logoDataUrl }) {
   );
 }
 
+// Einverständnis «E-Mail-Beleg» mit Datum (siehe shared/consent.js).
+function ConsentCheckbox({ person, onChange }) {
+  return (
+    <label style={styles.checkLabel}>
+      <input
+        type="checkbox"
+        checked={hasEmailConsent(person)}
+        onChange={(e) =>
+          onChange(e.target.checked ? grantEmailConsent(person, todayISO()) : { ...person, emailConsent: null })
+        }
+      />
+      Einverständnis E-Mail-Beleg (Adresse speichern, Belege per E-Mail)
+    </label>
+  );
+}
+
 function FieldGroup({ label, children }) {
   return (
     <div style={{ marginBottom: 20 }}>
@@ -3265,6 +3494,7 @@ const styles = {
   discountSummary: { marginTop: 12 },
   inventoryForm: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
   checkLabel: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#5B5F66" },
+  mailBox: { maxWidth: 640, margin: "0 auto 12px", padding: 12, border: "1px solid #E4E5E7", background: "#fff", display: "grid", gap: 8 },
   invHeaderRow: {
     display: "flex",
     gap: 8,

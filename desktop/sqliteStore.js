@@ -167,6 +167,13 @@ export function openStore(dbPath, { storeLogo, loadLogo } = {}) {
       return row ? JSON.parse(row.value) : null;
     },
 
+    // Einstellungen der Desktop-Version (z. B. SMTP ohne Passwort). Liegen
+    // ausserhalb von "personal:" und damit nicht im Zugriff von
+    // window.storage — die App ändert sie nur über eigene IPC-Aufrufe.
+    setMeta(name, value) {
+      upsert.run(META_PREFIX + name, JSON.stringify(value));
+    },
+
     // Schreibt Daten und Meta-Eintrag in einer Transaktion — z. B. damit eine
     // Migration nur dann als erledigt gilt, wenn wirklich alles drin ist.
     async setManyWithMeta(entries, metaName, metaValue) {

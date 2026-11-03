@@ -8,17 +8,19 @@
 // werden sie einmalig übernommen (migrateExcel.js); die Excel-Datei bleibt
 // unverändert als Sicherung liegen.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { getDataDir, getWorkbookPath, getCompanyPath, getDatabasePath } from "./dataDir.js";
+import { getDataDir, getWorkbookPath, getCompanyPath, getDatabasePath, getSecretsPath } from "./dataDir.js";
 import { readCompany } from "./companyStore.js";
 import { readCustomersList, readReceiptsList, readInventoryList } from "./excelStore.js";
 import { storeLogo, loadLogo } from "./logoCache.js";
 import { openStore } from "./sqliteStore.js";
 import { migrateFromExcel } from "./migrateExcel.js";
+import { createSecretStore } from "./secrets.js";
+import { createMailer, emptySmtpSettings, validateSmtpSettings, SMTP_PASSWORD_SECRET } from "./mailer.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -166,6 +168,70 @@ if (!gotLock) {
     return { ...result, shared };
   });
 
+  // ---- E-Mail-Versand (nur Desktop) ----
+  // Das Passwort verlässt den Hauptprozess nie: die App erfährt nur, ob eines
+  // gespeichert ist.
+
+  const SMTP_SETTINGS_META = "smtp-settings";
+  let secrets = null;
+  let mailer = null;
+
+  function readSmtpSettings() {
+    return { ...emptySmtpSettings, ...(store.getMeta(SMTP_SETTINGS_META) || {}) };
+  }
+
+  ipcMain.handle("mail:getSettings", async () => ({
+    settings: readSmtpSettings(),
+    passwordSet: secrets.has(SMTP_PASSWORD_SECRET),
+  }));
+
+  // password: null = unverändert lassen, "" = löschen, sonst neu setzen.
+  ipcMain.handle("mail:saveSettings", async (_event, settings, password) => {
+    const next = { ...emptySmtpSettings };
+    for (const key of Object.keys(emptySmtpSettings)) {
+      if (settings && settings[key] !== undefined) next[key] = settings[key];
+    }
+    next.port = Number(next.port);
+    const errors = validateSmtpSettings(next);
+    if (errors.length) return { ok: false, errors };
+    store.setMeta(SMTP_SETTINGS_META, next);
+    if (password === "") secrets.delete(SMTP_PASSWORD_SECRET);
+    else if (typeof password === "string") secrets.set(SMTP_PASSWORD_SECRET, password);
+    return { ok: true, passwordSet: secrets.has(SMTP_PASSWORD_SECRET) };
+  });
+
+  // Fehler gehen als Text zurück statt als Ausnahme: so kann die App die
+  // Meldung des SMTP-Servers anzeigen und an der Quittung festhalten.
+  ipcMain.handle("mail:sendTest", async (_event, to) => {
+    try {
+      await mailer.sendTest(to);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  });
+
+  ipcMain.handle("mail:sendReceipt", async (_event, payload) => {
+    try {
+      await mailer.sendReceipt(payload || {});
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  });
+
+  function openSecretsAndMailer() {
+    secrets = createSecretStore(getSecretsPath(), {
+      isAvailable: () => safeStorage.isEncryptionAvailable(),
+      encrypt: (text) => safeStorage.encryptString(text),
+      decrypt: (buffer) => safeStorage.decryptString(buffer),
+    });
+    mailer = createMailer({
+      getSettings: readSmtpSettings,
+      getPassword: () => secrets.get(SMTP_PASSWORD_SECRET),
+    });
+  }
+
   // Datenbank öffnen und Altdaten übernehmen, BEVOR das Fenster lädt — sonst
   // sähe die App beim ersten Start mit 1.2.0 kurz eine leere Datenbank.
   async function openDatabase() {
@@ -185,6 +251,7 @@ if (!gotLock) {
     if (result.migrated) {
       console.log("Daten aus Qwui-Daten.xlsx übernommen", result.meta.counts);
     }
+    openSecretsAndMailer();
   }
 
   app.whenReady().then(async () => {

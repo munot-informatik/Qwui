@@ -13,12 +13,14 @@
     "dist": "electron-builder --win portable"
   },
   "dependencies": {
-    "exceljs": "^4.4.0"
+    "exceljs": "^4.4.0",
+    "nodemailer": "^10.1.7"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
     "electron": "^44.10.1",
-    "electron-builder": "^26.18.0"
+    "electron-builder": "^26.18.0",
+    "smtp-server": "^3.20.2"
   },
   "build": {
     "appId": "ch.munot-informatik.qwui",
@@ -34,6 +36,8 @@
       "excelStore.js",
       "sqliteStore.js",
       "migrateExcel.js",
+      "secrets.js",
+      "mailer.js",
       "logoCache.js",
       "dist/**/*",
       "package.json"
