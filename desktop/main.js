@@ -25,6 +25,8 @@ import { checkBackupPassword, decryptBackup } from "./backupCrypto.js";
 import { createAutoBackup, notReadyReason, KIND, BACKUP_PASSWORD_SECRET } from "./autoBackup.js";
 // Kopie von ../shared (scripts/copy-shared.js), damit sie mit eingepackt wird.
 import { buildBackupPayload } from "./shared/backupFormat.js";
+import { buildShopFeed, shopFeedCsv, feedFingerprint } from "./shared/shopFeed.js";
+import { createShopSync, emptyShopConfig, validateWebhookUrl, SHOP_WEBHOOK_TOKEN_SECRET } from "./shopSync.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -154,13 +156,23 @@ if (!gotLock) {
 
   ipcMain.handle("storage:set", async (_event, key, value, shared) => {
     await store.set(key, value);
+    afterWrite([key]);
     return { key, value, shared };
   });
 
   ipcMain.handle("storage:setMany", async (_event, entries, shared) => {
     const result = await store.setMany(entries);
+    afterWrite(entries.map((e) => e.key));
     return { ...result, shared };
   });
+
+  // Bestand und Preise stecken in Inventar, Exemplaren und Lagerbewegungen —
+  // ändert sich einer davon, geht ein neuer Shop-Feed hinaus.
+  function afterWrite(keys) {
+    if (shopSync && keys.some((k) => k === "inventory-list" || k === "serial-units" || k.startsWith("stock-movements-"))) {
+      shopSync.trigger();
+    }
+  }
 
   ipcMain.handle("storage:delete", async (_event, key, shared) => {
     const result = await store.delete(key);
@@ -343,6 +355,80 @@ if (!gotLock) {
     setInterval(tick, BACKUP_CHECK_MS);
   }
 
+  // ---- Shop-Abgleich (nur Desktop, nur ausgehend) ----
+
+  const SHOP_CONFIG_META = "shop-config";
+  const SHOP_STATUS_META = "shop-status";
+  let shopSync = null;
+
+  function readShopConfig() {
+    return { ...emptyShopConfig, ...(store.getMeta(SHOP_CONFIG_META) || {}) };
+  }
+
+  async function buildCurrentFeed() {
+    const read = async (key) => {
+      const row = await store.get(key);
+      return row ? JSON.parse(row.value) : [];
+    };
+    const feed = buildShopFeed(await read("inventory-list"), await read("serial-units"));
+    return { feed, csv: shopFeedCsv(feed), fingerprint: feedFingerprint(feed) };
+  }
+
+  async function shopState() {
+    const { feed } = await buildCurrentFeed();
+    return {
+      config: readShopConfig(),
+      tokenSet: secrets.has(SHOP_WEBHOOK_TOKEN_SECRET),
+      status: store.getMeta(SHOP_STATUS_META) || {},
+      // Vorschau für die App: genau das, was der Shop bekommt.
+      feed,
+    };
+  }
+
+  ipcMain.handle("shop:getState", async () => shopState());
+
+  // token: null = unverändert lassen, "" = löschen, sonst neu setzen.
+  ipcMain.handle("shop:saveConfig", async (_event, config, token) => {
+    const next = {
+      fileEnabled: !!config?.fileEnabled,
+      fileDir: String(config?.fileDir || ""),
+      webhookEnabled: !!config?.webhookEnabled,
+      webhookUrl: String(config?.webhookUrl || "").trim(),
+    };
+    if (next.fileEnabled && !next.fileDir) return { ok: false, error: "Bitte einen Ordner für den Datei-Feed wählen." };
+    if (next.webhookEnabled) {
+      const problem = validateWebhookUrl(next.webhookUrl);
+      if (problem) return { ok: false, error: problem };
+    }
+    store.setMeta(SHOP_CONFIG_META, next);
+    if (token === "") secrets.delete(SHOP_WEBHOOK_TOKEN_SECRET);
+    else if (typeof token === "string") secrets.set(SHOP_WEBHOOK_TOKEN_SECRET, token);
+    return { ok: true, ...(await shopState()) };
+  });
+
+  ipcMain.handle("shop:chooseDir", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Ordner für den Shop-Feed",
+      properties: ["openDirectory", "createDirectory"],
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
+  ipcMain.handle("shop:syncNow", async () => {
+    await shopSync.syncNow();
+    return shopState();
+  });
+
+  function startShopSync() {
+    shopSync = createShopSync({
+      buildFeed: buildCurrentFeed,
+      getConfig: readShopConfig,
+      getToken: () => secrets.get(SHOP_WEBHOOK_TOKEN_SECRET),
+      readStatus: () => store.getMeta(SHOP_STATUS_META),
+      writeStatus: (status) => store.setMeta(SHOP_STATUS_META, status),
+    });
+  }
+
   function openSecretsAndMailer() {
     secrets = createSecretStore(getSecretsPath(), {
       isAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -376,6 +462,7 @@ if (!gotLock) {
     }
     openSecretsAndMailer();
     startAutoBackup();
+    startShopSync();
   }
 
   app.whenReady().then(async () => {

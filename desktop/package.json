@@ -42,6 +42,7 @@
       "mailer.js",
       "backupCrypto.js",
       "autoBackup.js",
+      "shopSync.js",
       "shared/**/*",
       "logoCache.js",
       "dist/**/*",

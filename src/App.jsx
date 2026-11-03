@@ -41,11 +41,13 @@ import {
 
 import { buildBackupPayload, looksLikeBackup, isEncryptedBackup } from "../shared/backupFormat.js";
 import BackupAutomatik from "./BackupAutomatik.jsx";
+import ShopAnbindung from "./ShopAnbindung.jsx";
 
 // Direkter Versand per SMTP und automatische Sicherung gibt es nur in der
 // Windows-Version (Preload).
 const desktopMail = typeof window !== "undefined" ? window.qwuiDesktop?.mail || null : null;
 const desktopBackup = typeof window !== "undefined" ? window.qwuiDesktop?.backup || null : null;
+const desktopShop = typeof window !== "undefined" ? window.qwuiDesktop?.shop || null : null;
 import {
   Plus,
   Trash2,
@@ -68,6 +70,7 @@ import {
   Download,
   AlertTriangle,
   Package,
+  Store,
 } from "lucide-react";
 
 // Backup-Dateiformat: siehe shared/backupFormat.js. Die Versionsnummer ist
@@ -1612,6 +1615,9 @@ export default function ReceiptApp() {
             <NavItem icon={FileText} label="Neue Quittung" active={tab === "new"} onClick={() => setTab("new")} />
             <NavItem icon={Users} label="Kunden" active={tab === "customers"} onClick={() => setTab("customers")} />
             <NavItem icon={Package} label="Inventar" active={tab === "inventory"} onClick={() => setTab("inventory")} />
+            {desktopShop && (
+              <NavItem icon={Store} label="Shop-Anbindung" active={tab === "shop"} onClick={() => setTab("shop")} />
+            )}
             <NavItem icon={Building2} label="Firma" active={tab === "company"} onClick={() => setTab("company")} />
             <NavItem icon={History} label="Verlauf" active={tab === "history"} onClick={() => setTab("history")} />
             <NavItem icon={Wallet} label="Buchhaltung" active={tab === "accounting"} onClick={() => setTab("accounting")} />
@@ -2741,6 +2747,14 @@ export default function ReceiptApp() {
                     </div>
                   ))
                 )}
+              </div>
+            )}
+
+            {tab === "shop" && desktopShop && (
+              <div style={styles.panel}>
+                <Eyebrow>Shop-Anbindung</Eyebrow>
+                <h1 style={styles.h1}>Bestand und Preise für den Shop</h1>
+                <ShopAnbindung />
               </div>
             )}
 
