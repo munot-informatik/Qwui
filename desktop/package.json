@@ -7,9 +7,11 @@
   "type": "module",
   "main": "main.js",
   "scripts": {
+    "prestart": "node scripts/copy-shared.js",
     "start": "electron .",
+    "predev": "node scripts/copy-shared.js",
     "dev": "cross-env QWUI_DEV_SERVER_URL=http://localhost:5173 electron .",
-    "predist": "node scripts/copy-dist.js",
+    "predist": "node scripts/copy-shared.js && node scripts/copy-dist.js",
     "dist": "electron-builder --win portable"
   },
   "dependencies": {
@@ -38,6 +40,9 @@
       "migrateExcel.js",
       "secrets.js",
       "mailer.js",
+      "backupCrypto.js",
+      "autoBackup.js",
+      "shared/**/*",
       "logoCache.js",
       "dist/**/*",
       "package.json"

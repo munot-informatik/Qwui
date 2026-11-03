@@ -39,8 +39,13 @@ import {
   isValidEmail,
 } from "../shared/consent.js";
 
-// Direkter Versand per SMTP gibt es nur in der Windows-Version (Preload).
+import { buildBackupPayload, looksLikeBackup, isEncryptedBackup } from "../shared/backupFormat.js";
+import BackupAutomatik from "./BackupAutomatik.jsx";
+
+// Direkter Versand per SMTP und automatische Sicherung gibt es nur in der
+// Windows-Version (Preload).
 const desktopMail = typeof window !== "undefined" ? window.qwuiDesktop?.mail || null : null;
+const desktopBackup = typeof window !== "undefined" ? window.qwuiDesktop?.backup || null : null;
 import {
   Plus,
   Trash2,
@@ -65,11 +70,9 @@ import {
   Package,
 } from "lucide-react";
 
-// Aktuelle Version des Backup-Dateiformats (siehe exportAllData/handleImportFileSelect).
-// Rein informativ beim Import — kein harter Kompatibilitäts-Check, damit auch
+// Backup-Dateiformat: siehe shared/backupFormat.js. Die Versionsnummer ist
+// beim Import rein informativ — kein harter Kompatibilitäts-Check, damit auch
 // künftige, abwärtskompatible Versionen weiterhin importiert werden können.
-// 2 = ab 1.2.0 mit Exemplaren (serialUnits) und Lagerbewegungen (stockMovements).
-const BACKUP_SCHEMA_VERSION = 2;
 
 const KEYS = {
   company: "company-info",
@@ -485,17 +488,27 @@ export default function ReceiptApp() {
   const [importError, setImportError] = useState("");
   const [importing, setImporting] = useState(false);
 
+  // Verschlüsselte Sicherung, die auf das Passwort wartet: { text, name, password, error }
+  const [encryptedImport, setEncryptedImport] = useState(null);
+
+  async function decryptImport() {
+    const { text, password } = encryptedImport;
+    const result = await desktopBackup.decrypt(text, password);
+    if (!result.ok) {
+      setEncryptedImport({ ...encryptedImport, error: result.error });
+      return;
+    }
+    const parsed = JSON.parse(result.json);
+    if (!looksLikeBackup(parsed)) {
+      setEncryptedImport({ ...encryptedImport, error: "Die Datei enthält keine Qwui-Daten." });
+      return;
+    }
+    setEncryptedImport(null);
+    setImportPreview(parsed);
+  }
+
   function exportAllData() {
-    const payload = {
-      schemaVersion: BACKUP_SCHEMA_VERSION,
-      exportedAt: new Date().toISOString(),
-      company,
-      customers,
-      receipts,
-      inventory,
-      serialUnits: units,
-      stockMovements: movementsByKey,
-    };
+    const payload = buildBackupPayload({ company, customers, receipts, inventory, units, movementsByKey });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -523,13 +536,18 @@ export default function ReceiptApp() {
         setImportError("Datei ist kein gültiges JSON.");
         return;
       }
-      const looksValid =
-        parsed &&
-        typeof parsed === "object" &&
-        typeof parsed.company === "object" &&
-        Array.isArray(parsed.customers) &&
-        Array.isArray(parsed.receipts);
-      if (!looksValid) {
+      // Verschlüsselte automatische Sicherung: erst nach dem Passwort fragen.
+      if (isEncryptedBackup(parsed)) {
+        if (!desktopBackup) {
+          setImportError(
+            "Das ist eine verschlüsselte automatische Sicherung der Windows-Version — sie lässt sich nur dort wiederherstellen."
+          );
+          return;
+        }
+        setEncryptedImport({ text: reader.result, name: file.name, password: "", error: "" });
+        return;
+      }
+      if (!looksLikeBackup(parsed)) {
         setImportError("Datei hat kein gültiges Qwui-Backup-Format.");
         return;
       }
@@ -580,6 +598,11 @@ export default function ReceiptApp() {
       // die Bestätigung stehen, damit der Import wiederholt werden kann — der
       // React-State zeigt sonst die importierten Daten an, während in der
       // Datenbank noch die alten stehen und beim nächsten Laden zurückkommen.
+      // Einstellungen aus einer automatischen Sicherung (Windows): SMTP und
+      // Backup-Ordner übernehmen, Passwörter sind darin nie enthalten.
+      if (desktopBackup && importPreview.settings) {
+        await desktopBackup.restoreSettings(importPreview.settings);
+      }
       if (okCompany && okCustomers && okReceipts && okInventory && okStock) {
         setImportPreview(null);
         setSaveStatus("Backup importiert");
@@ -2755,13 +2778,44 @@ export default function ReceiptApp() {
                     <Upload size={14} /> Backup-Datei auswählen
                     <input
                       type="file"
-                      accept="application/json,.json"
+                      accept="application/json,.json,.qwuibak"
                       onChange={handleImportFileSelect}
                       disabled={importing}
                       style={{ display: "none" }}
                     />
                   </label>
                   {importError && <div style={styles.hint}>{importError}</div>}
+                  {saveStatus && <div style={{ ...styles.savedMsg, marginTop: 8 }}>{saveStatus}</div>}
+                  {encryptedImport && (
+                    <div style={{ ...styles.importPreviewBox, display: "grid", gap: 8 }}>
+                      <div style={{ fontSize: 13 }}>
+                        <strong>{encryptedImport.name}</strong> ist verschlüsselt. Bitte das Backup-Passwort eingeben.
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input
+                          type="password"
+                          value={encryptedImport.password}
+                          onChange={(e) => setEncryptedImport({ ...encryptedImport, password: e.target.value, error: "" })}
+                          onKeyDown={(e) => e.key === "Enter" && encryptedImport.password && decryptImport()}
+                          placeholder="Backup-Passwort"
+                          style={{ flex: 1 }}
+                          aria-label="Backup-Passwort zum Wiederherstellen"
+                          autoFocus
+                        />
+                        <button
+                          onClick={decryptImport}
+                          disabled={!encryptedImport.password}
+                          style={{ ...styles.secondaryBtnSmall, opacity: encryptedImport.password ? 1 : 0.4 }}
+                        >
+                          Entschlüsseln
+                        </button>
+                        <button onClick={() => setEncryptedImport(null)} style={styles.linkBtn}>
+                          Abbrechen
+                        </button>
+                      </div>
+                      {encryptedImport.error && <div style={styles.hint}>{encryptedImport.error}</div>}
+                    </div>
+                  )}
                 </FieldGroup>
 
                 {importPreview && (
@@ -2791,6 +2845,12 @@ export default function ReceiptApp() {
                         Exportiert am {formatDateDE(importPreview.exportedAt.slice(0, 10))}
                       </div>
                     )}
+                    {importPreview.settings && desktopBackup && (
+                      <div style={{ fontSize: 12, color: "#5B5F66", marginBottom: 12 }}>
+                        Enthält Einstellungen (E-Mail-Versand, Sicherung) — sie werden übernommen. Passwörter
+                        sind nicht enthalten und müssen neu eingegeben werden.
+                      </div>
+                    )}
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <button onClick={confirmImport} disabled={importing} style={styles.dangerBtnSmall}>
                         {importing ? "Importiere…" : "Jetzt importieren (ersetzt alle Daten)"}
@@ -2801,6 +2861,9 @@ export default function ReceiptApp() {
                     </div>
                   </div>
                 )}
+
+                {/* Nur in der Windows-Version vorhanden (window.qwuiDesktop). */}
+                <BackupAutomatik />
               </div>
             )}
           </main>

@@ -5,7 +5,7 @@
 // (get/set/setMany/delete/list mit key + shared-Flag), siehe src/apiStorage.js.
 //
 // Dazu window.qwuiDesktop mit den Funktionen, die es nur unter Windows gibt
-// (ab 1.2.0: E-Mail-Versand per SMTP). Die Web-Version kennt dieses Objekt
+// (ab 1.2.0: E-Mail-Versand per SMTP, automatische Sicherung). Die Web-Version kennt dieses Objekt
 // nicht und blendet die zugehörigen Bereiche aus.
 //
 // Bewusst .cjs (CommonJS/require) statt .js: preload-Skripte laufen in
@@ -30,5 +30,14 @@ contextBridge.exposeInMainWorld("qwuiDesktop", {
     sendTest: (to) => ipcRenderer.invoke("mail:sendTest", to),
     // { to, subject, text, filename, pdf: Uint8Array }
     sendReceipt: (payload) => ipcRenderer.invoke("mail:sendReceipt", payload),
+  },
+  backup: {
+    getState: () => ipcRenderer.invoke("backup:getState"),
+    // password: null = unverändert
+    saveConfig: (config, password = null) => ipcRenderer.invoke("backup:saveConfig", config, password),
+    chooseDir: () => ipcRenderer.invoke("backup:chooseDir"),
+    runNow: () => ipcRenderer.invoke("backup:runNow"),
+    decrypt: (fileText, password) => ipcRenderer.invoke("backup:decrypt", fileText, password),
+    restoreSettings: (settings) => ipcRenderer.invoke("backup:restoreSettings", settings),
   },
 });

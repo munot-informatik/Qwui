@@ -21,6 +21,10 @@ import { openStore } from "./sqliteStore.js";
 import { migrateFromExcel } from "./migrateExcel.js";
 import { createSecretStore } from "./secrets.js";
 import { createMailer, emptySmtpSettings, validateSmtpSettings, SMTP_PASSWORD_SECRET } from "./mailer.js";
+import { checkBackupPassword, decryptBackup } from "./backupCrypto.js";
+import { createAutoBackup, notReadyReason, KIND, BACKUP_PASSWORD_SECRET } from "./autoBackup.js";
+// Kopie von ../shared (scripts/copy-shared.js), damit sie mit eingepackt wird.
+import { buildBackupPayload } from "./shared/backupFormat.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -220,6 +224,125 @@ if (!gotLock) {
     }
   });
 
+  // ---- Automatische Sicherung (nur Desktop) ----
+
+  const BACKUP_CONFIG_META = "backup-config";
+  const BACKUP_STATUS_META = "backup-status";
+  const BACKUP_CHECK_MS = 5 * 60 * 1000;
+  let autoBackup = null;
+
+  function readBackupConfig() {
+    return { enabled: false, dir: "", ...(store.getMeta(BACKUP_CONFIG_META) || {}) };
+  }
+
+  // Alles, was in eine Sicherung gehört — dieselbe Form wie «Alle Daten
+  // exportieren» in der App, dazu die Einstellungen ohne Passwörter.
+  async function buildStorePayload() {
+    const read = async (key, fallback) => {
+      const row = await store.get(key);
+      return row ? JSON.parse(row.value) : fallback;
+    };
+    const movementsByKey = {};
+    for (const key of (await store.list("stock-movements-")).keys) {
+      movementsByKey[key] = await read(key, []);
+    }
+    const { dir, enabled } = readBackupConfig();
+    return buildBackupPayload({
+      company: await read("company-info", {}),
+      customers: await read("customers-list", []),
+      receipts: await read("receipts-list", []),
+      inventory: await read("inventory-list", []),
+      units: await read("serial-units", []),
+      movementsByKey,
+      settings: { smtp: readSmtpSettings(), backup: { dir, enabled } },
+    });
+  }
+
+  function backupState() {
+    const config = readBackupConfig();
+    const passwordSet = secrets.has(BACKUP_PASSWORD_SECRET);
+    return {
+      config,
+      passwordSet,
+      notReady: notReadyReason(config, passwordSet),
+      status: store.getMeta(BACKUP_STATUS_META) || {},
+    };
+  }
+
+  ipcMain.handle("backup:getState", async () => backupState());
+
+  // password: null = unverändert lassen, sonst neu setzen (mind. 8 Zeichen).
+  ipcMain.handle("backup:saveConfig", async (_event, config, password) => {
+    if (typeof password === "string") {
+      const problem = checkBackupPassword(password);
+      if (problem) return { ok: false, error: problem };
+      secrets.set(BACKUP_PASSWORD_SECRET, password);
+    }
+    store.setMeta(BACKUP_CONFIG_META, { enabled: !!config?.enabled, dir: String(config?.dir || "") });
+    // Gleich sichern, was fällig ist — nicht erst beim nächsten Zeitgeber —,
+    // damit die App den Status der ersten Sicherung sofort anzeigen kann.
+    try {
+      await autoBackup.tick();
+    } catch (e) {
+      console.error("Sicherung fehlgeschlagen", e);
+    }
+    return { ok: true, ...backupState() };
+  });
+
+  ipcMain.handle("backup:chooseDir", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Zielordner für die automatische Sicherung",
+      properties: ["openDirectory", "createDirectory"],
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
+  ipcMain.handle("backup:runNow", async () => {
+    await autoBackup.runBackup(KIND.hourly);
+    return backupState();
+  });
+
+  // Entschlüsselt eine gewählte Sicherung für die Import-Vorschau. Das
+  // Passwort wird dabei nicht gespeichert — beim Wiederherstellen auf einem
+  // neuen PC ist es oft ein anderes Konto oder ein anderes Passwort.
+  ipcMain.handle("backup:decrypt", async (_event, fileText, password) => {
+    try {
+      return { ok: true, json: decryptBackup(fileText, password) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // Einstellungen aus einer Sicherung übernehmen (ohne Passwörter, die müssen
+  // auf dem neuen PC neu eingegeben werden).
+  ipcMain.handle("backup:restoreSettings", async (_event, settings) => {
+    if (settings?.smtp && validateSmtpSettings(settings.smtp).length === 0) {
+      const next = { ...emptySmtpSettings };
+      for (const key of Object.keys(emptySmtpSettings)) {
+        if (settings.smtp[key] !== undefined) next[key] = settings.smtp[key];
+      }
+      store.setMeta(SMTP_SETTINGS_META, next);
+    }
+    if (settings?.backup) {
+      store.setMeta(BACKUP_CONFIG_META, { enabled: !!settings.backup.enabled, dir: String(settings.backup.dir || "") });
+    }
+    return { ok: true };
+  });
+
+  function startAutoBackup() {
+    autoBackup = createAutoBackup({
+      buildPayload: buildStorePayload,
+      getConfig: readBackupConfig,
+      getPassword: () => secrets.get(BACKUP_PASSWORD_SECRET),
+      readStatus: () => store.getMeta(BACKUP_STATUS_META),
+      writeStatus: (status) => store.setMeta(BACKUP_STATUS_META, status),
+    });
+    const tick = () => autoBackup.tick().catch((e) => console.error("Sicherung fehlgeschlagen", e));
+    // Kurz nach dem Start, dann alle fünf Minuten nachsehen, ob etwas fällig ist.
+    setTimeout(tick, 30 * 1000);
+    setInterval(tick, BACKUP_CHECK_MS);
+  }
+
   function openSecretsAndMailer() {
     secrets = createSecretStore(getSecretsPath(), {
       isAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -252,6 +375,7 @@ if (!gotLock) {
       console.log("Daten aus Qwui-Daten.xlsx übernommen", result.meta.counts);
     }
     openSecretsAndMailer();
+    startAutoBackup();
   }
 
   app.whenReady().then(async () => {
