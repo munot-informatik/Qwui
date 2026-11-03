@@ -411,6 +411,9 @@ if (!gotLock) {
     store.setMeta(SHOP_CONFIG_META, next);
     if (token === "") secrets.delete(SHOP_WEBHOOK_TOKEN_SECRET);
     else if (typeof token === "string") secrets.set(SHOP_WEBHOOK_TOKEN_SECRET, token);
+    // Neue oder geänderte Ziele gleich beliefern, nicht erst bei der
+    // nächsten Lagerbewegung (gebündelt, blockiert das Speichern nicht).
+    shopSync.trigger();
     return { ok: true, ...(await shopState()) };
   });
 
@@ -471,9 +474,11 @@ if (!gotLock) {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("drafts:changed");
   }
 
+  // Für Assistent und Excel-Auswertung: ohne Logos (store.getRaw), die
+  // braucht dort niemand.
   async function readAssistantData() {
     const read = async (key, fallback) => {
-      const row = await store.get(key);
+      const row = store.getRaw(key);
       return row ? JSON.parse(row.value) : fallback;
     };
     const movements = [];

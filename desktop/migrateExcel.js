@@ -12,13 +12,11 @@
 // Die Lesefunktionen werden übergeben, damit sich die Übernahme ohne
 // Electron testen lässt (test/migration.test.js).
 
-export const MIGRATION_META = "migration";
+// Kopie von ../shared (scripts/copy-shared.js) — derselbe Jahres-Schlüssel
+// und Bewegungstyp wie in der App.
+import { MOVEMENT_TYPE, movementsKey } from "./shared/stock.js";
 
-// Gleiche Werte wie in shared/stock.js (MOVEMENT_TYPE, movementsKey). Bewusst
-// hier dupliziert statt importiert: shared/ liegt ausserhalb von desktop/ und
-// wird nicht mit eingepackt. test/migration.test.js prüft die Übereinstimmung.
-const MOVEMENT_TYPE_CORRECTION = "inventurkorrektur";
-const movementsKey = (iso) => `stock-movements-${String(iso).slice(0, 4)}`;
+export const MIGRATION_META = "migration";
 
 export const OPENING_NOTE = "Übernahme aus Qwui-Daten.xlsx (Version 1.2.0)";
 
@@ -48,7 +46,7 @@ export async function migrateFromExcel(store, sources, ctx) {
       articleNumber: p.articleNumber || "",
       serial: null,
       qty: Number(p.stock) || 0,
-      type: MOVEMENT_TYPE_CORRECTION,
+      type: MOVEMENT_TYPE.correction,
       ref: { note: OPENING_NOTE },
       source: "app",
     }));

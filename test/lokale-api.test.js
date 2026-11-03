@@ -101,12 +101,40 @@ describe("Zugriff", () => {
   });
 });
 
+describe("Umlaute", () => {
+  it("liest einen Umlaut richtig, der auf zwei Pakete verteilt ankommt", async () => {
+    const { request } = await import("node:http");
+    const port = new URL(base).port;
+    const body = Buffer.from(JSON.stringify({ name: "Bälle-Set", preis: 49, shop_text: "Für Profis" }), "utf8");
+    // Mitten im «ä» (2 Bytes in UTF-8) trennen.
+    const cut = body.indexOf(Buffer.from("ä")) + 1;
+    const res = await new Promise((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port,
+          method: "POST",
+          path: "/v1/tools/artikel_vorschlagen",
+          headers: { Host: `127.0.0.1:${port}`, Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json", "Content-Length": body.length },
+        },
+        resolve
+      );
+      req.on("error", reject);
+      req.write(body.subarray(0, cut));
+      setTimeout(() => req.end(body.subarray(cut)), 30);
+    });
+    expect(res.statusCode).toBe(200);
+    expect(drafts[0].payload).toMatchObject({ name: "Bälle-Set", shopText: "Für Profis" });
+  });
+});
+
 describe("Entwürfe statt Buchungen", () => {
   it("legt einen Wareneingang nur als Entwurf an — der Bestand bleibt", async () => {
     const res = await call("wareneingang_vorschlagen", { artikel: "PRED-REVO", seriennummern: ["PR-2001", "PR-2002"] });
     const body = await res.json();
-    expect(body.result).toMatchObject({ draftId: "d1", type: "wareneingang", status: "offen", quantity: 2 });
+    expect(body.result).toMatchObject({ type: "wareneingang", status: "offen", quantity: 2 });
     expect(drafts).toHaveLength(1);
+    expect(body.result.draftId).toBe(drafts[0].id);
     expect(data.units).toHaveLength(3);
   });
 });

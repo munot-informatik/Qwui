@@ -2,7 +2,7 @@
 // Preisänderung geht der Shop-Feed (shared/shopFeed.js) an die eingerichteten
 // Ziele. Nur ausgehend — Qwui nimmt keine Verbindungen aus dem Internet an.
 //
-// Ziele sind Adapter mit derselben Form { id, label, push(feed, csv) }, damit
+// Ziele sind Adapter mit derselben Form { id, label, target, push(feed, csv) }, damit
 // sich später weitere Shops anbinden lassen (z. B. WooCommerce), ohne den
 // Ablauf hier anzufassen. Heute:
 //   - "datei":   JSON und CSV in einen Ordner (den der Shop oder ein
@@ -51,6 +51,7 @@ export function fileAdapter(dir) {
   return {
     id: "datei",
     label: "Datei-Feed",
+    target: String(dir),
     async push(feed, csv) {
       if (!existsSync(dir)) throw new Error(`Der Ordner ${dir} ist nicht erreichbar.`);
       // Erst vollständig schreiben, dann umbenennen: der Shop liest nie eine
@@ -71,6 +72,7 @@ export function webhookAdapter(url, token, fetchImpl = globalThis.fetch) {
   return {
     id: "webhook",
     label: "Webhook",
+    target: String(url).trim(),
     async push(feed) {
       const problem = validateWebhookUrl(url);
       if (problem) throw new Error(problem);
@@ -122,7 +124,9 @@ export function createShopSync({
 
   async function syncAdapter(adapter, built, { force, attempt = 0 }) {
     const previous = (readStatus() || {})[adapter.id];
-    if (!force && previous?.ok && previous.fingerprint === built.fingerprint) return;
+    // Unverändert = gleicher Inhalt UND gleiches Ziel. Ein neuer Ordner oder
+    // eine neue Webhook-Adresse bekommt den Feed sofort, auch ohne Änderung.
+    if (!force && previous?.ok && previous.fingerprint === built.fingerprint && previous.target === adapter.target) return;
     if (retryTimers[adapter.id]) {
       clearTimer(retryTimers[adapter.id]);
       delete retryTimers[adapter.id];
@@ -130,7 +134,16 @@ export function createShopSync({
     const at = now().toISOString();
     try {
       await adapter.push(built.feed, built.csv);
-      update(adapter.id, { ok: true, at, lastSuccessAt: at, fingerprint: built.fingerprint, error: null, nextRetryAt: null, items: built.feed.items.length });
+      update(adapter.id, {
+        ok: true,
+        at,
+        lastSuccessAt: at,
+        fingerprint: built.fingerprint,
+        target: adapter.target,
+        error: null,
+        nextRetryAt: null,
+        items: built.feed.items.length,
+      });
     } catch (e) {
       const delay = RETRY_DELAYS_MS[attempt];
       const nextRetryAt = delay != null ? new Date(now().getTime() + delay).toISOString() : null;

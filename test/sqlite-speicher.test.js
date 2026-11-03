@@ -105,4 +105,19 @@ describe("Logos in Quittungen", () => {
     const restored = JSON.parse((await store.get("receipts-list")).value);
     expect(restored[0].company).toEqual({ name: "Billard AG", logoDataUrl: logo });
   });
+
+  it("liest für Auswertungen ohne Logos (getRaw)", async () => {
+    let loads = 0;
+    store = openStore(join(dir, "qwui.db"), {
+      storeLogo: async () => ({ logoRef: "abc.png", logoMime: "image/png" }),
+      loadLogo: async () => {
+        loads++;
+        return "data:image/png;base64,AAAA";
+      },
+    });
+    await store.set("receipts-list", JSON.stringify([{ id: "r1", company: { logoDataUrl: "data:image/png;base64,AAAA" } }]));
+    const raw = JSON.parse(store.getRaw("receipts-list").value);
+    expect(raw[0].company).toEqual({ logoRef: "abc.png", logoMime: "image/png" });
+    expect(loads).toBe(0);
+  });
 });

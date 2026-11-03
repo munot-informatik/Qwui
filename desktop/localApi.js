@@ -60,16 +60,17 @@ export function createLocalApi({ getToken, toolNames, runTool, log }) {
       return send(res, 404, { ok: false, error: "Unbekannter Pfad." });
     }
 
-    let body = "";
-    let tooLarge = false;
+    // Erst alle Bytes sammeln, dann einmal als UTF-8 lesen: ein Umlaut kann
+    // auf zwei Netzwerk-Pakete verteilt ankommen und wäre Stück für Stück
+    // dekodiert kaputt.
+    const chunks = [];
+    let size = 0;
     for await (const chunk of req) {
-      body += chunk;
-      if (body.length > MAX_BODY) {
-        tooLarge = true;
-        break;
-      }
+      size += chunk.length;
+      if (size > MAX_BODY) return send(res, 413, { ok: false, error: "Anfrage zu gross." });
+      chunks.push(chunk);
     }
-    if (tooLarge) return send(res, 413, { ok: false, error: "Anfrage zu gross." });
+    const body = Buffer.concat(chunks).toString("utf8");
 
     let args = {};
     try {

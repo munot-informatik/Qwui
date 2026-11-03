@@ -134,6 +134,14 @@ export function openStore(dbPath, { storeLogo, loadLogo } = {}) {
       return { key, value };
     },
 
+    // Wie get(), aber ohne die Logos wieder einzusetzen — für Auswertungen
+    // (Assistent, Excel), die keine Logos brauchen. Spart das Lesen einer
+    // Logo-Datei pro Quittung.
+    getRaw(key) {
+      const row = selectOne.get(fullKey(key));
+      return row ? { key, value: row.value } : null;
+    },
+
     async set(key, value) {
       const prepared = await prepareValue(key, value);
       upsert.run(fullKey(key), prepared);

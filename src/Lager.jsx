@@ -56,7 +56,9 @@ export function StockCell({ product, units, onCommit }) {
   }
 
   function commit() {
-    const next = Number(value);
+    // Ein leeres Feld ist keine Zählung: Number("") wäre 0 und würde den
+    // ganzen Bestand per Inventurkorrektur ausbuchen. Wer 0 meint, tippt 0.
+    const next = String(value).trim() === "" ? NaN : Number(value);
     if (!Number.isFinite(next)) {
       setValue(String(product.stock ?? 0));
       return;

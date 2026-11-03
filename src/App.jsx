@@ -614,12 +614,14 @@ export default function ReceiptApp() {
       // die Bestätigung stehen, damit der Import wiederholt werden kann — der
       // React-State zeigt sonst die importierten Daten an, während in der
       // Datenbank noch die alten stehen und beim nächsten Laden zurückkommen.
-      // Einstellungen aus einer automatischen Sicherung (Windows): SMTP und
-      // Backup-Ordner übernehmen, Passwörter sind darin nie enthalten.
-      if (desktopBackup && importPreview.settings) {
-        await desktopBackup.restoreSettings(importPreview.settings);
-      }
       if (okCompany && okCustomers && okReceipts && okInventory && okStock) {
+        // Einstellungen aus einer automatischen Sicherung (Windows): SMTP und
+        // Backup-Ordner übernehmen, Passwörter sind darin nie enthalten. Erst
+        // nach geglücktem Import — sonst stünden neue Einstellungen neben den
+        // alten Daten.
+        if (desktopBackup && importPreview.settings) {
+          await desktopBackup.restoreSettings(importPreview.settings);
+        }
         setImportPreview(null);
         setSaveStatus("Backup importiert");
         setTimeout(() => setSaveStatus(""), 3000);
@@ -902,6 +904,15 @@ export default function ReceiptApp() {
         if (isSerialTracked(product) && serials.length === 0) {
           return [`«${product.name}» ist seriennummernpflichtig — der Vorschlag enthält keine Seriennummern.`];
         }
+        // Umgekehrt nicht still die Seriennummern verlieren, die der
+        // Assistent erfassen sollte.
+        if (!isSerialTracked(product) && serials.length > 0) {
+          return [
+            `«${product.name}» ist nicht seriennummernpflichtig — die Seriennummern im Vorschlag ` +
+              `(${serials.join(", ")}) würden verloren gehen. Entweder die Seriennummernpflicht beim ` +
+              `Artikel einschalten oder den Vorschlag verwerfen.`,
+          ];
+        }
         const entry = isSerialTracked(product)
           ? { productId: product.id, serials }
           : { productId: product.id, quantity: draft.payload.quantity };
@@ -1130,7 +1141,13 @@ export default function ReceiptApp() {
     setItems(
       items.map((it) =>
         it.id === id
-          ? { ...it, kind, ...(kind === "service" ? { articleNumber: "", productId: "", unitId: "", serial: "" } : {}) }
+          ? {
+              ...it,
+              kind,
+              // Die Menge ist bei Dienstleistungen nicht sichtbar — eine vom
+              // Produkt übrig gebliebene Menge würde den Preis unbemerkt vervielfachen.
+              ...(kind === "service" ? { articleNumber: "", productId: "", unitId: "", serial: "", quantity: "1" } : {}),
+            }
           : it
       )
     );
@@ -1360,7 +1377,7 @@ export default function ReceiptApp() {
     const print = !!desktopMail && deliveryPrint;
     if (wantsMail && deliveryAddress) await sendReceiptByMail(receipt, deliveryAddress, list);
     // Drucken erst, wenn die Vorschau steht — gedruckt wird die Bildschirmansicht.
-    if (print) setTimeout(printReceipt, 400);
+    if (print) setTimeout(() => printReceipt(receipt), 400);
   }
 
   function startEditReceipt(r) {
@@ -1517,10 +1534,12 @@ export default function ReceiptApp() {
     setMailState(result.ok ? { state: "sent", to, error: "" } : { state: "error", to, error: result.error });
   }
 
-  function printReceipt() {
+  // receipt: direkt nach dem Erstellen übergeben, weil currentReceipt in
+  // diesem Moment noch den alten Stand hat.
+  function printReceipt(receipt = currentReceipt) {
     const previousTitle = document.title;
-    if (currentReceipt) {
-      document.title = `${documentWord(currentReceipt)} ${currentReceipt.number} – ${currentReceipt.customer.name || ""}`.trim();
+    if (receipt && receipt.number) {
+      document.title = `${documentWord(receipt)} ${receipt.number} – ${receipt.customer.name || ""}`.trim();
     }
     const restoreTitle = () => {
       document.title = previousTitle;
@@ -3021,7 +3040,7 @@ export default function ReceiptApp() {
               <button onClick={downloadPdf} style={styles.secondaryBtn} disabled={generatingPdf}>
                 <Printer size={14} /> {generatingPdf ? "Erstelle PDF…" : "PDF herunterladen"}
               </button>
-              <button onClick={printReceipt} style={styles.secondaryBtn}>
+              <button onClick={() => printReceipt()} style={styles.secondaryBtn}>
                 Drucken
               </button>
               {canShareFiles && (

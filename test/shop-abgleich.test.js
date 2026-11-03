@@ -148,6 +148,23 @@ describe("Auslösen nach Änderungen", () => {
     expect(requests).toHaveLength(2);
   });
 
+  it("beliefert einen neuen Ordner sofort, auch wenn sich der Bestand nicht geändert hat", async () => {
+    const config = { fileEnabled: true, fileDir: dir };
+    const s = sync(config);
+    await s.syncNow();
+    const other = mkdtempSync(join(tmpdir(), "qwui-shop-neu-"));
+    try {
+      config.fileDir = other;
+      s.trigger();
+      await timers.at(-1).fn();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(existsSync(join(other, FEED_JSON))).toBe(true);
+      expect(status.datei.target).toBe(other);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it("tut nichts, solange kein Ziel eingerichtet ist", async () => {
     await sync({}).syncNow();
     expect(requests).toHaveLength(0);
