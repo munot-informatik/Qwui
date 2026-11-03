@@ -30,6 +30,7 @@ import { createShopSync, emptyShopConfig, validateWebhookUrl, SHOP_WEBHOOK_TOKEN
 import { runAssistantTool, TOOL_NAMES } from "./shared/assistantTools.js";
 import { DRAFT_STATUS } from "./shared/drafts.js";
 import { createLocalApi, API_TOKEN_SECRET, DEFAULT_API_PORT } from "./localApi.js";
+import { writeEvaluation } from "./excelExport.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -137,6 +138,10 @@ if (!gotLock) {
                 },
               ]
             : []),
+          {
+            label: "Excel-Auswertung erstellen…",
+            click: () => exportEvaluation().catch((e) => dialog.showErrorBox("Excel-Auswertung", e.message)),
+          },
           { type: "separator" },
           { role: "reload" },
           { type: "separator" },
@@ -550,6 +555,32 @@ if (!gotLock) {
     );
     notifyDraftsChanged();
     return { ok: true };
+  });
+
+  // ---- Excel-Auswertung (Kunden, Zahlungen, Inventar, Exemplare, Bewegungen) ----
+  // Nur noch zum Ansehen und Weitergeben; die Daten selbst liegen in qwui.db.
+
+  async function exportEvaluation() {
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Excel-Auswertung speichern",
+      defaultPath: join(getDataDir(), `Qwui-Auswertung_${today}.xlsx`),
+      filters: [{ name: "Excel", extensions: ["xlsx"] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    const data = await readAssistantData();
+    const customers = await store.get("customers-list");
+    await writeEvaluation(result.filePath, { ...data, customers: customers ? JSON.parse(customers.value) : [] });
+    shell.showItemInFolder(result.filePath);
+    return { ok: true, path: result.filePath };
+  }
+
+  ipcMain.handle("export:evaluation", async () => {
+    try {
+      return await exportEvaluation();
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
   });
 
   async function startLocalApi() {

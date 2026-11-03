@@ -494,3 +494,7 @@ export const writeReceiptsList = (list) =>
 
     await saveWorkbookAtomic(wb);
   });
+
+// Für die Excel-Auswertung ab 1.2.0 (excelExport.js): dieselbe Ampel und
+// Fälligkeit wie bisher im Sheet "Zahlungen".
+export { statusInfo, paymentTermOf, addDaysISO, documentWord, STATUS_STYLE };

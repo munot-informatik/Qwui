@@ -26,6 +26,12 @@ eingerichtete, live erreichbare App" durch.
 14. [Troubleshooting](#14-troubleshooting)
 15. [Desktop-Version (Windows .exe)](#15-desktop-version-windows-exe)
 16. [Backup & Datenübertragung (Web ↔ Windows)](#16-backup--datenübertragung-web--windows)
+17. [Lager und Seriennummern](#17-lager-und-seriennummern)
+18. [E-Mail-Versand (Windows)](#18-e-mail-versand-windows)
+19. [Automatische Sicherung (Windows)](#19-automatische-sicherung-windows)
+20. [Shop-Anbindung (Windows)](#20-shop-anbindung-windows)
+21. [Assistent (Claude Desktop)](#21-assistent-claude-desktop)
+22. [Tests](#22-tests)
 
 ---
 
@@ -41,7 +47,12 @@ eingerichtete, live erreichbare App" durch.
   Schweizer/Liechtensteiner IBAN — keine QR-IBAN nötig.
 - **PDF-Export**: Exakt positioniertes PDF direkt im Browser erzeugt (`pdf-lib`),
   QR-Rechnung landet garantiert am unteren Seitenrand.
-- **Versand**: Per E-Mail (`mailto:`) oder WhatsApp (`wa.me`) mit vorausgefülltem Text.
+- **Versand**: Per E-Mail oder WhatsApp (`wa.me`) mit vorausgefülltem Text. Die
+  Windows-Version versendet E-Mails direkt per SMTP mit der PDF als Anhang
+  (Abschnitt 18), die Web-Version öffnet das E-Mail-Programm (`mailto:`).
+- **Lager und Seriennummern**: Bestand pro Artikel, Einzelstücke mit
+  Seriennummer, Wareneingang per Barcode-Scanner, Protokoll aller
+  Lagerbewegungen, Garantie-Suche nach Seriennummer (Abschnitt 17).
 - **Verlauf & Bearbeiten**: Alle Quittungen einsehen, bearbeiten, löschen.
 - **Buchhaltung**: Monats-/Jahresübersicht, offene/bezahlte Beträge, Excel-Export.
 - **Zentrale Datenbank**: Alle Daten liegen in Cloudflare D1 — jedes Gerät sieht nach
@@ -54,6 +65,9 @@ eingerichtete, live erreichbare App" durch.
   Function), inkl. Rate-Limiting gegen Brute-Force.
 - **PWA**: Installierbar auf Desktop/Handy, mit Icon und Offline-Cache für die
   Oberfläche.
+- **Nur in der Windows-Version**: automatische, verschlüsselte Sicherung
+  (Abschnitt 19), Shop-Abgleich von Bestand und Preisen (Abschnitt 20) und ein
+  lokaler Zugang für den Assistenten Claude (Abschnitt 21).
 
 ## 2. Voraussetzungen
 
@@ -91,16 +105,33 @@ index.html                     Einstiegspunkt (Vite)
 src/                            React-App (UI, Logik)
   App.jsx                       Hauptkomponente: alle Tabs, Formulare, Vorschau
   BuchhaltungTab.jsx             Buchhaltungs-Übersicht + Excel-Export
+  Lager.jsx                      Wareneingang, Exemplare, Seriennummer-Suche, Lagerbewegungen
+  EmailEinstellungen.jsx         SMTP-Einstellungen (nur Windows)
+  BackupAutomatik.jsx            Automatische Sicherung (nur Windows)
+  ShopAnbindung.jsx              Shop-Feed: Ziele, Status, Vorschau (nur Windows)
+  Assistent.jsx                  Vorschläge, lokale Schnittstelle, Protokoll (nur Windows)
   QrBillDocument.jsx             Bildschirm-/Druckansicht des QR-Einzahlungsscheins
   qrbill.js                      Swiss-QR-Payload, IBAN-/Referenz-Prüfziffern
   pdfGenerator.js                Clientseitige PDF-Erzeugung (pdf-lib)
   apiStorage.js                  Speicher-Adapter, spricht mit D1 via /api/storage
   storageShim.js                 Alte localStorage-Variante (Referenz/Offline-Fallback)
+shared/                          Reine Logik für App und Windows-Hauptprozess
+  items.js                       Positionen: Menge, Listenpreis, Rabatt, Betrag
+  stock.js, serials.js           Lagerbuchungen, Exemplare, Seriennummern
+  consent.js                     Einverständnis E-Mail-Beleg
+  backupFormat.js                Aufbau der Backup-Datei
+  shopFeed.js                    Shop-Feed (ohne Seriennummern/Einkaufspreise)
+  reports.js, drafts.js,         Auswertungen und Entwürfe für den Assistenten
+  assistantTools.js
+desktop/                         Windows-Version (Electron), siehe Abschnitt 15
+mcp/                             MCP-Server für Claude Desktop, siehe Abschnitt 21
+test/                            vitest-Tests, siehe Abschnitt 22
 public/                          Icons, PWA-Manifest, Service Worker
 functions/
   _middleware.js                 Passwortschutz + Rate-Limiting (läuft vor jedem Request)
   api/storage.js                 GET/POST/DELETE für einzelne Schlüssel (D1)
   api/storage-list.js            Auflisten von Schlüsseln nach Präfix (D1)
+  api/storage-batch.js           Mehrere Schlüssel in einem Schritt (D1-Batch)
 schema.sql                       Datenbankschema für Cloudflare D1
 wrangler.toml                    Cloudflare-Konfiguration (D1-Binding, Compat-Flags)
 vite.config.js                   Build-Konfiguration
@@ -247,9 +278,10 @@ In der Quittungs-Vorschau stehen mehrere Aktionen zur Verfügung:
   dadurch garantiert am unteren Seitenrand, unabhängig von Browser/Druck-Engine und
   unabhängig von der Länge der Quittung.
 - **Drucken**: klassischer Browser-Druckdialog (`window.print()`) als Alternative.
-- **Per E-Mail senden**: öffnet das E-Mail-Programm mit vorausgefülltem Betreff/Text
-  (kein automatischer Anhang möglich — PDF vorher herunterladen und manuell
-  anhängen).
+- **Per E-Mail senden**: In der Windows-Version geht die E-Mail direkt mit der
+  PDF als Anhang hinaus (Abschnitt 18). In der Web-Version öffnet sich das
+  E-Mail-Programm mit vorausgefülltem Betreff/Text (kein automatischer Anhang
+  möglich — PDF vorher herunterladen und manuell anhängen).
 - **Per WhatsApp senden**: öffnet WhatsApp (App oder Web) mit fertigem Text; ist eine
   Telefonnummer beim Kunden hinterlegt, wird der Chat direkt vorausgewählt.
 - **Teilen** (nur sichtbar, wenn das Gerät es unterstützt — v. a. mobile Browser):
@@ -356,16 +388,18 @@ gehen dann nach einem Neuladen der Seite verloren.
 
 Neben der gehosteten Web-App gibt es eine eigenständige Windows-Version mit
 identischem Funktionsumfang (Firma, Kunden, Quittungen/Rechnungen inkl.
-QR-Rechnung, PDF-Erzeugung, Buchhaltung inkl. Mahnwesen) — läuft komplett offline,
-**ohne Installation**, und speichert alle Daten lokal in einer Excel-Datei statt in
-Cloudflare D1. Technisch ein zweites, kleines Teilprojekt in `desktop/`
+QR-Rechnung, PDF-Erzeugung, Buchhaltung inkl. Mahnwesen, Lager) — läuft komplett
+offline, **ohne Installation**, und speichert alle Daten lokal in einer
+SQLite-Datenbank statt in Cloudflare D1. Dazu kommen Funktionen, die nur lokal Sinn
+ergeben: E-Mail-Versand per SMTP, automatische Sicherung, Shop-Abgleich und der
+Zugang für den Assistenten (Abschnitte 18–21). Technisch ein zweites, kleines Teilprojekt in `desktop/`
 (Electron), das dieselbe React-Oberfläche lädt wie die Web-App — nur der
 Speicher-Adapter ist ausgetauscht (`src/electronStorage.js` statt
 `src/apiStorage.js`, automatisch erkannt in `src/main.jsx`).
 
-**Download:** Fertige `Qwui-1.0.0.exe` zum direkten Herunterladen unter
-[Releases](https://github.com/munot-informatik/Qwui/releases/tag/v1.0.0-desktop) —
-kein eigenes Bauen nötig, einfach herunterladen und doppelklicken.
+**Download:** Fertige `.exe`-Dateien zum direkten Herunterladen unter
+[Releases](https://github.com/munot-informatik/Qwui/releases) — kein eigenes
+Bauen nötig, einfach herunterladen und doppelklicken.
 
 ### Bauen
 
@@ -374,7 +408,7 @@ npm install
 npm run build          # Web-App im Projekt-Root bauen (dist/)
 cd desktop
 npm install
-npm run dist            # kopiert dist/ hinein und erzeugt die portable .exe
+npm run dist            # kopiert dist/ und shared/ hinein und erzeugt die portable .exe
 ```
 
 Die fertige `Qwui-<Version>.exe` liegt danach in `desktop/release/`. Einfach
@@ -404,44 +438,47 @@ erneut ausführen.
 fertig. Beim ersten Start wird dort automatisch ein Ordner `Qwui-Daten\`
 angelegt (im selben Verzeichnis, in dem die `Qwui.exe` liegt), darin:
 
-- **`Qwui-Daten.xlsx`** — die eigentliche Datenbank, zwei Sheets:
-  - **"Kunden"**: alphabetisch sortiert, direkt in Excel bearbeitbar (Änderungen
-    an Name/Adresse/etc. wirken sich beim nächsten App-Start aus).
-  - **"Zahlungen"**: gruppiert nach Kunde, innerhalb jeder Gruppe chronologisch
-    (neueste unten). Die sichtbaren Spalten (Betrag, Status mit Ampelfarbe,
-    Fälligkeit, …) sind **nur zur Anzeige** — massgeblich ist die letzte Spalte
-    "Rohdaten", die bei jedem Speichern aus der App neu geschrieben wird. Hand-
-    Änderungen an den übrigen Spalten in dieser Sheet werden beim nächsten
-    Speichern aus der App wieder überschrieben.
-- **`firma.json`** — Firmendaten (inkl. Logo), separat von den zwei Excel-Sheets.
-- **`logos/`** — hochgeladene Firmenlogos als eigene Bilddateien (Excel-Zellen
-  können keine grossen Base64-Bilder fassen).
+- **`qwui.db`** — die Datenbank (SQLite) mit Firma, Kunden, Quittungen,
+  Inventar, Exemplaren und Lagerbewegungen. Gleicher Aufbau wie die
+  Cloudflare-Datenbank der Web-Version (Tabelle `kv_store`). Die Dateien
+  `qwui.db-wal` und `qwui.db-shm` daneben gehören dazu.
+- **`geheim.bin`** — Passwörter und Tokens (SMTP, Sicherung, Shop, Assistent),
+  verschlüsselt mit der Windows-Verschlüsselung des angemeldeten Benutzers.
+  Auf einem anderen PC oder in einem anderen Windows-Konto lässt sich die Datei
+  nicht lesen — die Passwörter müssen dort neu eingegeben werden.
+- **`logos/`** — hochgeladene Firmenlogos als eigene Bilddateien.
 
-**Ampel-Farben** in der Spalte "Zahlungsstatus": Grün = bezahlt/Direktzahlung,
-Orange = offen, Zahlungsfrist noch nicht abgelaufen, Rot = offen und überfällig
-(> 30 Tage, dieselbe Frist wie auf der Quittung selbst).
+**Umstieg von Version 1.1:** Bis 1.1 lagen die Daten in `Qwui-Daten.xlsx` und
+`firma.json`. Beim ersten Start mit 1.2.0 übernimmt Qwui sie vollständig in die
+Datenbank; für jeden Artikel mit Bestand entsteht dabei eine Inventurkorrektur
+«Übernahme aus Qwui-Daten.xlsx». Beide Dateien bleiben **unverändert** als
+Sicherung liegen; die Excel-Datei lässt sich über das Menü **Qwui →
+Excel-Sicherung aus Version 1.1 öffnen** ansehen. Änderungen darin wirken sich
+nicht mehr auf Qwui aus.
 
-**Backup-Empfehlung:** Da die Daten (anders als bei der Web-Version mit D1) nur
-lokal auf diesem einen Rechner liegen, empfiehlt sich eine regelmässige Kopie des
-`Qwui-Daten\`-Ordners an einen zweiten Ort (externe Platte, Cloud-Ordner). Die
-App legt bei jedem Speichern selbst zusätzlich eine rollierende
-`Qwui-Daten.xlsx.bak`-Sicherung an.
+**Excel-Auswertung:** Über **Backup → Excel-Auswertung erstellen** (oder das
+Menü **Qwui**) entsteht eine Excel-Datei mit den Blättern Kunden, Zahlungen,
+Inventar, Exemplare und Lagerbewegungen — zum Ansehen, Filtern und
+Weitergeben, z. B. an die Treuhand. **Ampel-Farben** in der Spalte
+"Zahlungsstatus": Grün = bezahlt/Direktzahlung, Orange = offen, Zahlungsfrist
+noch nicht abgelaufen, Rot = offen und überfällig. Kunden lassen sich nicht
+mehr in Excel bearbeiten, sondern nur noch in der App.
+
+**Backup-Empfehlung:** Die automatische Sicherung einschalten (Abschnitt 19).
+Sie legt stündlich und täglich eine verschlüsselte Kopie in einen Cloud-Ordner.
 
 **Verschieben der .exe:** Liegt die `Qwui.exe` z. B. auf einem USB-Stick oder wird
 in einen anderen Ordner verschoben, wandert der `Qwui-Daten\`-Ordner beim nächsten
 Start automatisch mit — die App findet ihre Daten immer relativ zur eigenen
 .exe-Datei (technisch über die von electron-builders portablem Windows-Build
-gesetzte Umgebungsvariable `PORTABLE_EXECUTABLE_DIR`).
-
-**Bekannte Einschränkung:** Ist die Excel-Datei gerade in Microsoft Excel selbst
-geöffnet, kann die App nicht speichern (Windows-Dateisperre) — sie meldet das
-sichtbar im Banner oben, statt die Änderung stillschweigend zu verlieren. Excel
-schliessen und erneut versuchen.
+gesetzte Umgebungsvariable `PORTABLE_EXECUTABLE_DIR`). Der erste Start einer
+neuen .exe dauert einige Sekunden länger, weil sie sich zuerst entpackt.
 
 ## 16. Backup & Datenübertragung (Web ↔ Windows)
 
 Tab **Backup** (in beiden Versionen identisch vorhanden) exportiert Firma, alle
-Kunden und alle Quittungen/Rechnungen als eine einzelne JSON-Datei
+Kunden, alle Quittungen/Rechnungen, das Inventar samt Exemplaren und die
+Lagerbewegungen als eine einzelne JSON-Datei
 (`Qwui-Backup_JJJJ-MM-TT.json`) und kann dieselbe Datei wieder importieren. Damit
 lassen sich drei Fälle abdecken, ohne eine echte bidirektionale Cloud-Synchronisation
 (Login-Popup, automatischer Merge) bauen zu müssen — bei einer einzelnen Firma pro
@@ -467,4 +504,210 @@ Zielversion ziehen, falls der Import rückgängig gemacht werden müsste.
 
 Die JSON-Datei enthält alle Daten unverschlüsselt im Klartext (inkl. Kundenadressen)
 — beim Ablegen in einem Cloud-Speicher gilt dessen übliche Verschlüsselung/Zugriffs-
-schutz, wie bei jeder anderen dort gespeicherten Datei auch.
+schutz, wie bei jeder anderen dort gespeicherten Datei auch. Für regelmässige
+Sicherungen in die Cloud gibt es in der Windows-Version die automatische,
+verschlüsselte Sicherung (Abschnitt 19).
+
+Backups aus Version 1.1 enthalten noch keine Exemplare und Lagerbewegungen. Beim
+Import bleiben die vorhandenen dann stehen; die Vorschau weist darauf hin, dass
+Bestand und Quittungen danach im Inventar zu prüfen sind.
+
+## 17. Lager und Seriennummern
+
+Reiter **Inventar**, oben vier Bereiche: Artikel, Wareneingang, Seriennummer
+suchen, Lagerbewegungen. Funktioniert in der Web- und der Windows-Version.
+
+**Seriennummernpflicht:** Hochpreisige Einzelstücke (z. B. Queues) bekommen
+beim Artikel das Häkchen **S/N-Pflicht**. Jedes Exemplar hat dann eine eigene
+Seriennummer und einen Status — an Lager, reserviert, verkauft, retourniert.
+Die Stückzahl lässt sich bei diesen Artikeln nicht mehr eintippen, sie ergibt
+sich aus den Exemplaren **an Lager**. Über **Exemplare** beim Artikel klappt
+die Liste auf; dort lassen sich Reservation und Retoure von Hand setzen und
+Bemerkungen erfassen. Einschalten lässt sich die Pflicht bei Bestand 0,
+ausschalten nur, solange keine Exemplare erfasst sind.
+
+**Wareneingang:** Ein Barcode-Scanner verhält sich wie eine Tastatur: er tippt
+den Code und drückt Enter.
+
+1. Artikelnummer scannen (oder den Artikel wählen). Ist sie unbekannt, bietet
+   Qwui an, den Artikel gleich anzulegen.
+2. Bei Seriennummernpflicht die Seriennummern hintereinander scannen — der
+   Fokus bleibt im Feld, doppelte Scans und bereits erfasste Nummern
+   erscheinen sofort rot. Sonst die Menge eingeben.
+3. Optional Einkaufspreis und Bemerkung (z. B. Lieferschein), dann
+   **Wareneingang buchen**.
+
+**Verkauf:** In der Quittung bei der Position **Produkt** den Artikel wählen.
+Bei Seriennummernpflicht muss ein Exemplar gewählt werden, sonst wird die
+Quittung nicht erstellt; die Seriennummer steht danach als «S/N: …» auf dem
+Beleg. Bei anderen Artikeln gibt es das Feld **Menge**. Erstellen, Bearbeiten
+und Löschen buchen den Bestand mit — beim Bearbeiten und Löschen als Storno,
+nichts wird still überschrieben. Unter 0 warnt Qwui, verkauft aber trotzdem.
+Quittungen von vor 1.2.0 haben nichts gebucht; ihr Löschen verändert den
+Bestand nicht.
+
+**Lagerbewegungen:** Jeder Wareneingang, Verkauf, Storno und jede
+Inventurkorrektur (Stückzahl von Hand oder per Excel-Import geändert) steht
+mit Zeitpunkt, Seriennummer, Menge, Referenz und Quelle (App oder Assistent)
+im Protokoll. Reservierte Exemplare zählen nicht als verfügbar, erzeugen aber
+keine Bewegung.
+
+**Garantiefall:** **Seriennummer suchen** zeigt Artikel, Status, Eingangs- und
+Verkaufsdatum, Quittung und Kunde — mit Sprung direkt zur Quittung.
+
+**Gespeichert in einem Schritt:** Quittung, Exemplare, Bestand und
+Lagerbewegungen eines Verkaufs werden zusammen gespeichert — unter Windows in
+einer Datenbank-Transaktion, im Web über `/api/storage-batch` als D1-Batch.
+Bricht das Speichern ab, bleibt alles beim alten Stand.
+
+## 18. E-Mail-Versand (Windows)
+
+Die Windows-Version verschickt Quittungen und Rechnungen direkt per SMTP, die
+PDF hängt automatisch an.
+
+**Einrichten:** **Firma → E-Mail-Versand (SMTP)**: Server, Verschlüsselung
+(STARTTLS meist Port 587, SSL/TLS meist Port 465), Benutzer, Passwort, Absender.
+Die Angaben stehen beim E-Mail-Anbieter unter "Postausgangsserver". **Test-Mail
+senden** prüft die Einstellungen sofort. Das Passwort liegt verschlüsselt in
+`geheim.bin` und wird in der App nie wieder angezeigt.
+
+**Versenden:** Beim Erstellen einer Quittung unter **Nach dem Erstellen** «Per
+E-Mail senden» und/oder «Drucken» wählen — E-Mail ist vorgewählt, sobald beim
+Kunden eine Adresse hinterlegt ist. In der Vorschau verschickt **Per E-Mail
+senden** jederzeit erneut. Ob der Versand geklappt hat (oder mit welcher
+Meldung er scheiterte), steht an der Quittung und im Verlauf.
+
+**Einverständnis «E-Mail-Beleg»:** Beim Kunden lässt sich das Einverständnis
+mit Datum erfassen. Ohne Einverständnis wird die E-Mail-Adresse **nicht
+gespeichert** — weder beim Kunden noch auf der Quittung; sie dient nur dem einen
+Versand. Kunden aus Version 1.1 behalten ihre Adresse; die Kundenliste zeigt
+"Einverständnis fehlt" und bietet an, es zu erfassen oder die Adresse zu
+entfernen.
+
+Die Web-Version bleibt beim bisherigen Weg (`mailto:`, Teilen-Dialog).
+
+## 19. Automatische Sicherung (Windows)
+
+**Backup → Automatische Sicherung:** Stündlich und täglich eine Sicherung aller
+Daten — im selben Format wie «Alle Daten exportieren», zusätzlich mit den
+Einstellungen (ohne Passwörter) — in einen frei wählbaren Ordner. Am besten ein
+Ordner, den Proton Drive, OneDrive o. ä. mit der Cloud abgleicht; Qwui selbst
+lädt nichts hoch.
+
+- **Verschlüsselt** mit einem Backup-Passwort (mind. 8 Zeichen; AES-256-GCM,
+  Schlüssel per scrypt). Ohne Passwort wird nicht gesichert — die App zeigt das
+  als Hinweis an. **Das Passwort gut aufbewahren** (z. B. im Passwort-Manager):
+  ohne es lässt sich keine Sicherung öffnen.
+- **Dateien:** `Qwui-Backup_stuendlich_JJJJ-MM-TT_hh-mm-ss.qwuibak` bzw.
+  `…_taeglich_…`. Behalten werden 48 stündliche und 30 tägliche; ältere löscht
+  Qwui. Andere Dateien im Ordner bleiben unberührt.
+- **Wann:** Gesichert wird, solange Qwui läuft. War die App geschlossen, holt sie
+  die fällige Sicherung kurz nach dem nächsten Start nach. **Jetzt sichern**
+  sichert sofort.
+- **Status:** Letzte Sicherung und allfällige Fehler (z. B. Cloud-Ordner nicht
+  erreichbar) stehen im Backup-Reiter.
+
+**Wiederherstellen:** **Backup → Backup-Datei auswählen**, die `.qwuibak`-Datei
+wählen und das Backup-Passwort eingeben. Danach erscheint die gewohnte
+Vorschau. Einstellungen (SMTP-Server, Backup-Ordner) werden mit übernommen,
+Passwörter müssen neu eingegeben werden. Die Web-Version kann verschlüsselte
+Sicherungen nicht öffnen; für die Übertragung Windows → Web bleibt «Alle Daten
+exportieren».
+
+## 20. Shop-Anbindung (Windows)
+
+Reiter **Shop-Anbindung:** Nach jeder Lagerbewegung und Preisänderung geht ein
+Shop-Feed hinaus — pro Artikel Artikelnummer, Name, Produktgruppe, Preis,
+verfügbare Menge und Status (verfügbar/ausverkauft). **Seriennummern und
+Einkaufspreise sind nie enthalten.**
+
+- **Datei-Feed:** `qwui-shop-feed.json` und `qwui-shop-feed.csv` (Semikolon)
+  in einen gewählten Ordner.
+- **Webhook:** Der Feed als JSON per HTTPS-POST an eine Adresse des Shops,
+  optional mit Token (`Authorization: Bearer …`, verschlüsselt gespeichert).
+  Nur ausgehend — Qwui nimmt keine Verbindungen aus dem Internet an.
+
+Schlägt ein Abgleich fehl, versucht Qwui es nach 1, 5 und 15 Minuten erneut.
+Mehrere schnelle Änderungen werden zu einem Abgleich gebündelt, unveränderte
+Feeds nicht erneut geschickt. **Jetzt abgleichen** schickt sofort; Status und
+Vorschau zeigen, was der Shop zuletzt bekommen hat.
+
+Die Anbindung eines bestimmten Shopsystems (z. B. WooCommerce) wäre ein
+weiterer Adapter in `desktop/shopSync.js`.
+
+## 21. Assistent (Claude Desktop)
+
+Claude kann Qwui bedienen, **ohne dass Qwui aus dem Internet erreichbar ist**:
+Die Windows-App öffnet auf Wunsch eine Schnittstelle nur auf diesem PC
+(`127.0.0.1`), und ein kleiner MCP-Server (`mcp/`) verbindet Claude Desktop
+damit. Claude Desktop muss dafür auf demselben PC laufen.
+
+**Werkzeuge:** `artikel_suchen`, `bestand_abfragen`, `seriennummer_suchen`,
+`umsatz_auswerten`, `ladenhueter`, `wareneingang_vorschlagen`,
+`artikel_vorschlagen`, `backup_status`.
+
+- **Nur Entwürfe:** Wareneingänge und neue Artikel aus Claude erscheinen in
+  Qwui unter **Assistent → Vorschläge des Assistenten** und werden erst mit
+  **Übernehmen** gebucht (Lagerbewegungen mit Quelle «Assistent»).
+- **Datenschutz:** Der Assistent bekommt keine Namen, Adressen, E-Mails oder
+  Telefonnummern, nur Kunden-IDs; die Zuordnung macht der Laden in Qwui.
+  Geschäftszahlen wie Bestand und Umsatz gehen aber an Claude und damit an
+  Anthropic.
+- **Protokoll:** Jeder Zugriff steht mit Zeit, Werkzeug und Ergebnis unter
+  **Assistent**.
+
+**Einrichten (einmalig):**
+
+1. [Node.js](https://nodejs.org) (LTS) installieren.
+2. Den Ordner `mcp/` aus diesem Repository auf den PC kopieren und darin
+   einmal ausführen:
+
+   ```bash
+   npm install
+   ```
+
+3. In Qwui **Assistent → Lokale Schnittstelle einschalten → Speichern**. Qwui
+   erzeugt ein Zugriffstoken und zeigt den fertigen Eintrag für Claude Desktop.
+4. In Claude Desktop **Einstellungen → Entwickler → Konfiguration bearbeiten**
+   und den Eintrag einfügen, mit dem richtigen Pfad zu `server.js`:
+
+   ```json
+   {
+     "mcpServers": {
+       "qwui": {
+         "command": "node",
+         "args": ["C:\\Qwui\\mcp\\server.js"],
+         "env": {
+           "QWUI_API_URL": "http://127.0.0.1:47110",
+           "QWUI_API_TOKEN": "<Token aus Qwui>"
+         }
+       }
+     }
+   }
+   ```
+
+5. Claude Desktop neu starten. Probe: «Wie viele Predator-Queues haben wir an
+   Lager?»
+
+**Sicherheit:** Die Schnittstelle ist standardmässig aus und lauscht nur auf
+`127.0.0.1`. Ohne gültiges Token, aus einem Browser (Origin-Header) oder unter
+fremdem Host-Namen (DNS-Rebinding) wird jede Anfrage abgewiesen. Das Token wie
+ein Passwort behandeln; **Erneuern** macht das alte sofort ungültig (danach den
+Eintrag in Claude Desktop anpassen).
+
+## 22. Tests
+
+```bash
+npm install
+(cd desktop && npm install)
+(cd mcp && npm install)
+npm test
+```
+
+Die Tests (vitest, Ordner `test/`) prüfen u. a. Belegsinhalt und Seitenlayout der
+PDF, Lagerbuchungen und Seriennummern, die Übernahme aus `Qwui-Daten.xlsx`, den
+SQLite-Speicher, E-Mail-Versand gegen einen lokalen SMTP-Testserver,
+Verschlüsselung und Rotation der Sicherungen, Shop-Feed und Webhook, die lokale
+Schnittstelle samt Token-Schutz und den MCP-Server über stdio. Abhängigkeiten
+aus `desktop/` und `mcp/` werden dafür gebraucht, deshalb die drei
+`npm install`.

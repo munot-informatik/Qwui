@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld("qwuiDesktop", {
     runNow: () => ipcRenderer.invoke("backup:runNow"),
     decrypt: (fileText, password) => ipcRenderer.invoke("backup:decrypt", fileText, password),
     restoreSettings: (settings) => ipcRenderer.invoke("backup:restoreSettings", settings),
+    // Excel-Auswertung mit Speichern-Dialog
+    exportEvaluation: () => ipcRenderer.invoke("export:evaluation"),
   },
   shop: {
     getState: () => ipcRenderer.invoke("shop:getState"),

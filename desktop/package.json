@@ -1,7 +1,7 @@
 {
   "name": "qwui-desktop",
   "productName": "Qwui",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Qwui Windows-Desktop-Version (Electron, lokale SQLite-Datenbank)",
   "private": true,
   "type": "module",
@@ -44,6 +44,7 @@
       "autoBackup.js",
       "shopSync.js",
       "localApi.js",
+      "excelExport.js",
       "shared/**/*",
       "logoCache.js",
       "dist/**/*",

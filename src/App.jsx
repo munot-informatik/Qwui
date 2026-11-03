@@ -514,7 +514,16 @@ export default function ReceiptApp() {
     setImportPreview(parsed);
   }
 
-  function exportAllData() {
+  const [evaluationStatus, setEvaluationStatus] = useState("");
+
+  async function exportEvaluation() {
+    setEvaluationStatus("");
+    const result = await desktopBackup.exportEvaluation();
+    if (result.ok) setEvaluationStatus(`Gespeichert: ${result.path}`);
+    else if (!result.canceled) setEvaluationStatus(`Excel-Auswertung fehlgeschlagen: ${result.error}`);
+  }
+
+    function exportAllData() {
     const payload = buildBackupPayload({ company, customers, receipts, inventory, units, movementsByKey });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -2872,9 +2881,23 @@ export default function ReceiptApp() {
                 </div>
 
                 <FieldGroup label="Exportieren">
-                  <button onClick={exportAllData} style={styles.secondaryBtn}>
-                    <Download size={14} /> Alle Daten exportieren
-                  </button>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button onClick={exportAllData} style={styles.secondaryBtn}>
+                      <Download size={14} /> Alle Daten exportieren
+                    </button>
+                    {desktopBackup && (
+                      <button onClick={exportEvaluation} style={styles.secondaryBtn}>
+                        <Download size={14} /> Excel-Auswertung erstellen
+                      </button>
+                    )}
+                  </div>
+                  {desktopBackup && (
+                    <div style={{ ...styles.muted, marginTop: 6 }}>
+                      Die Excel-Auswertung (Kunden, Zahlungen, Inventar, Exemplare, Lagerbewegungen) ist zum Ansehen und
+                      Weitergeben — Änderungen darin fliessen nicht zurück in Qwui.
+                    </div>
+                  )}
+                  {evaluationStatus && <div style={{ ...styles.savedMsg, marginTop: 6 }}>{evaluationStatus}</div>}
                 </FieldGroup>
 
                 <FieldGroup label="Importieren">

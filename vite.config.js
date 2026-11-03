@@ -7,4 +7,8 @@ export default defineConfig({
   build: {
     outDir: "dist",
   },
+  test: {
+    // Kopiert shared/ nach desktop/shared, siehe test/helpers/copyShared.js.
+    globalSetup: ["./test/helpers/copyShared.js"],
+  },
 });
