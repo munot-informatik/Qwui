@@ -12,7 +12,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "e
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { getDataDir, getWorkbookPath, getCompanyPath, getDatabasePath, getSecretsPath } from "./dataDir.js";
 import { readCompany } from "./companyStore.js";
 import { readCustomersList, readReceiptsList, readInventoryList } from "./excelStore.js";
@@ -27,6 +27,9 @@ import { createAutoBackup, notReadyReason, KIND, BACKUP_PASSWORD_SECRET } from "
 import { buildBackupPayload } from "./shared/backupFormat.js";
 import { buildShopFeed, shopFeedCsv, feedFingerprint } from "./shared/shopFeed.js";
 import { createShopSync, emptyShopConfig, validateWebhookUrl, SHOP_WEBHOOK_TOKEN_SECRET } from "./shopSync.js";
+import { runAssistantTool, TOOL_NAMES } from "./shared/assistantTools.js";
+import { DRAFT_STATUS } from "./shared/drafts.js";
+import { createLocalApi, API_TOKEN_SECRET, DEFAULT_API_PORT } from "./localApi.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -429,6 +432,150 @@ if (!gotLock) {
     });
   }
 
+  // ---- Lokale Schnittstelle für den Assistenten (nur Desktop) ----
+  // Standardmässig aus. Lesende Werkzeuge geben keine Personendaten heraus,
+  // schreibende legen nur Entwürfe an (siehe shared/assistantTools.js).
+
+  const API_CONFIG_META = "api-config";
+  const API_LOG_META = "api-log";
+  const DRAFTS_META = "assistant-drafts";
+  const API_LOG_MAX = 500;
+  let localApi = null;
+  let apiError = null;
+
+  function readApiConfig() {
+    return { enabled: false, port: DEFAULT_API_PORT, ...(store.getMeta(API_CONFIG_META) || {}) };
+  }
+
+  function ensureApiToken() {
+    if (!secrets.get(API_TOKEN_SECRET)) secrets.set(API_TOKEN_SECRET, randomBytes(24).toString("base64url"));
+    return secrets.get(API_TOKEN_SECRET);
+  }
+
+  function appendApiLog(entry) {
+    const log = store.getMeta(API_LOG_META) || [];
+    log.push(entry);
+    store.setMeta(API_LOG_META, log.slice(-API_LOG_MAX));
+  }
+
+  function readDrafts() {
+    return store.getMeta(DRAFTS_META) || [];
+  }
+
+  function notifyDraftsChanged() {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("drafts:changed");
+  }
+
+  async function readAssistantData() {
+    const read = async (key, fallback) => {
+      const row = await store.get(key);
+      return row ? JSON.parse(row.value) : fallback;
+    };
+    const movements = [];
+    for (const key of (await store.list("stock-movements-")).keys) movements.push(...(await read(key, [])));
+    return {
+      inventory: await read("inventory-list", []),
+      units: await read("serial-units", []),
+      receipts: await read("receipts-list", []),
+      movements,
+    };
+  }
+
+  // Für backup_status: Zeitpunkte und Ergebnis, ohne Ordnerpfad.
+  function backupStatusForAssistant() {
+    const { notReady, status } = backupState();
+    const brief = (s) => (s ? { zuletztErfolgreich: s.lastSuccessAt || null, letzterVersuch: s.at || null, ok: !!s.ok, fehler: s.ok ? null : s.error || null } : null);
+    return { aktiv: !notReady, hinweis: notReady, stuendlich: brief(status.stuendlich), taeglich: brief(status.taeglich) };
+  }
+
+  async function applyApiConfig() {
+    const config = readApiConfig();
+    apiError = null;
+    try {
+      if (config.enabled) {
+        ensureApiToken();
+        await localApi.start(Number(config.port) || DEFAULT_API_PORT);
+      } else {
+        await localApi.stop();
+      }
+    } catch (e) {
+      apiError = e.code === "EADDRINUSE" ? `Port ${config.port} ist bereits belegt — bitte einen anderen wählen.` : e.message;
+      await localApi.stop();
+    }
+  }
+
+  function apiState() {
+    const config = readApiConfig();
+    return {
+      config,
+      token: config.enabled ? secrets.get(API_TOKEN_SECRET) : null,
+      running: localApi.running,
+      error: apiError,
+      log: (store.getMeta(API_LOG_META) || []).slice(-100).reverse(),
+    };
+  }
+
+  ipcMain.handle("api:getState", async () => apiState());
+
+  ipcMain.handle("api:saveConfig", async (_event, config) => {
+    const port = Number(config?.port);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      return { ok: false, error: "Port muss zwischen 1024 und 65535 liegen." };
+    }
+    store.setMeta(API_CONFIG_META, { enabled: !!config?.enabled, port });
+    await applyApiConfig();
+    return { ok: !apiError, error: apiError, ...apiState() };
+  });
+
+  // Neues Token: das alte gilt sofort nicht mehr (z. B. wenn es in falsche
+  // Hände geraten ist). Claude Desktop muss danach neu eingerichtet werden.
+  ipcMain.handle("api:regenerateToken", async () => {
+    secrets.set(API_TOKEN_SECRET, randomBytes(24).toString("base64url"));
+    return apiState();
+  });
+
+  ipcMain.handle("drafts:list", async () => readDrafts());
+
+  // Nur offene Entwürfe lassen sich übernehmen oder verwerfen — ein zweites
+  // «Übernehmen» desselben Entwurfs bucht nichts doppelt.
+  ipcMain.handle("drafts:setStatus", async (_event, id, status) => {
+    if (![DRAFT_STATUS.accepted, DRAFT_STATUS.rejected].includes(status)) return { ok: false, error: "Unbekannter Status." };
+    const drafts = readDrafts();
+    const draft = drafts.find((d) => d.id === id);
+    if (!draft) return { ok: false, error: "Entwurf nicht gefunden." };
+    if (draft.status !== DRAFT_STATUS.open) return { ok: false, error: `Entwurf ist bereits ${draft.status}.` };
+    store.setMeta(
+      DRAFTS_META,
+      drafts.map((d) => (d.id === id ? { ...d, status, decidedAt: new Date().toISOString() } : d))
+    );
+    notifyDraftsChanged();
+    return { ok: true };
+  });
+
+  async function startLocalApi() {
+    localApi = createLocalApi({
+      getToken: () => secrets.get(API_TOKEN_SECRET),
+      toolNames: TOOL_NAMES,
+      log: appendApiLog,
+      runTool: (name, args) =>
+        runAssistantTool(name, args, {
+          readData: readAssistantData,
+          addDraft: async (draft) => {
+            // Höchstens 200 Entwürfe behalten; die ältesten erledigten fallen weg.
+            const drafts = [...readDrafts(), draft];
+            const open = drafts.filter((d) => d.status === DRAFT_STATUS.open);
+            const done = drafts.filter((d) => d.status !== DRAFT_STATUS.open);
+            store.setMeta(DRAFTS_META, [...done.slice(-Math.max(0, 200 - open.length)), ...open]);
+            notifyDraftsChanged();
+          },
+          getBackupStatus: backupStatusForAssistant,
+          now: () => new Date(),
+          newId: () => randomUUID().slice(0, 8),
+        }),
+    });
+    await applyApiConfig();
+  }
+
   function openSecretsAndMailer() {
     secrets = createSecretStore(getSecretsPath(), {
       isAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -463,6 +610,7 @@ if (!gotLock) {
     openSecretsAndMailer();
     startAutoBackup();
     startShopSync();
+    await startLocalApi();
   }
 
   app.whenReady().then(async () => {
@@ -488,6 +636,7 @@ if (!gotLock) {
   });
 
   app.on("will-quit", () => {
+    if (localApi) localApi.stop();
     if (store) store.close();
   });
 

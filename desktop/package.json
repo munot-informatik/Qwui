@@ -43,6 +43,7 @@
       "backupCrypto.js",
       "autoBackup.js",
       "shopSync.js",
+      "localApi.js",
       "shared/**/*",
       "logoCache.js",
       "dist/**/*",

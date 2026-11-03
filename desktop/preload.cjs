@@ -5,7 +5,8 @@
 // (get/set/setMany/delete/list mit key + shared-Flag), siehe src/apiStorage.js.
 //
 // Dazu window.qwuiDesktop mit den Funktionen, die es nur unter Windows gibt
-// (ab 1.2.0: E-Mail-Versand per SMTP, automatische Sicherung, Shop-Abgleich). Die Web-Version kennt dieses Objekt
+// (ab 1.2.0: E-Mail-Versand per SMTP, automatische Sicherung, Shop-Abgleich,
+// lokale Schnittstelle und Vorschläge des Assistenten). Die Web-Version kennt dieses Objekt
 // nicht und blendet die zugehörigen Bereiche aus.
 //
 // Bewusst .cjs (CommonJS/require) statt .js: preload-Skripte laufen in
@@ -46,5 +47,18 @@ contextBridge.exposeInMainWorld("qwuiDesktop", {
     saveConfig: (config, token = null) => ipcRenderer.invoke("shop:saveConfig", config, token),
     chooseDir: () => ipcRenderer.invoke("shop:chooseDir"),
     syncNow: () => ipcRenderer.invoke("shop:syncNow"),
+  },
+  assistant: {
+    getState: () => ipcRenderer.invoke("api:getState"),
+    saveConfig: (config) => ipcRenderer.invoke("api:saveConfig", config),
+    regenerateToken: () => ipcRenderer.invoke("api:regenerateToken"),
+    listDrafts: () => ipcRenderer.invoke("drafts:list"),
+    setDraftStatus: (id, status) => ipcRenderer.invoke("drafts:setStatus", id, status),
+    // Meldet neue oder erledigte Entwürfe; liefert eine Abmelde-Funktion.
+    onDraftsChanged: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on("drafts:changed", listener);
+      return () => ipcRenderer.removeListener("drafts:changed", listener);
+    },
   },
 });

@@ -42,12 +42,15 @@ import {
 import { buildBackupPayload, looksLikeBackup, isEncryptedBackup } from "../shared/backupFormat.js";
 import BackupAutomatik from "./BackupAutomatik.jsx";
 import ShopAnbindung from "./ShopAnbindung.jsx";
+import { Vorschlaege, Schnittstelle } from "./Assistent.jsx";
+import { findArticle } from "../shared/reports.js";
 
 // Direkter Versand per SMTP und automatische Sicherung gibt es nur in der
 // Windows-Version (Preload).
 const desktopMail = typeof window !== "undefined" ? window.qwuiDesktop?.mail || null : null;
 const desktopBackup = typeof window !== "undefined" ? window.qwuiDesktop?.backup || null : null;
 const desktopShop = typeof window !== "undefined" ? window.qwuiDesktop?.shop || null : null;
+const desktopAssistant = typeof window !== "undefined" ? window.qwuiDesktop?.assistant || null : null;
 import {
   Plus,
   Trash2,
@@ -71,6 +74,7 @@ import {
   AlertTriangle,
   Package,
   Store,
+  Bot,
 } from "lucide-react";
 
 // Backup-Dateiformat: siehe shared/backupFormat.js. Die Versionsnummer ist
@@ -778,6 +782,9 @@ export default function ReceiptApp() {
       stock: 0,
       price: Number(fields.price) || 0,
       serialTracked,
+      ...(fields.shopText ? { shopText: String(fields.shopText) } : {}),
+      // Aus einem Vorschlag des Assistenten übernommen (verhindert Doppelte).
+      ...(fields.sourceDraftId ? { sourceDraftId: fields.sourceDraftId } : {}),
     };
     const initial = serialTracked ? 0 : Number(fields.stock) || 0;
     const result = correctStock({ inventory: [...inventory, entry], units }, entry.id, initial, stockCtx(), "Anfangsbestand");
@@ -836,6 +843,75 @@ export default function ReceiptApp() {
   function openReceiptById(id) {
     const r = receipts.find((x) => x.id === id);
     if (r) openReceipt(r);
+  }
+
+  // ---- Vorschläge des Assistenten (nur Windows) ----
+  const [drafts, setDrafts] = useState([]);
+  useEffect(() => {
+    if (!desktopAssistant) return;
+    const reload = () => desktopAssistant.listDrafts().then(setDrafts);
+    reload();
+    return desktopAssistant.onDraftsChanged(reload);
+  }, []);
+  const openDraftCount = drafts.filter((d) => d.status === "offen").length;
+
+  function describeDraftArticle(ref) {
+    const p = findArticle(inventory, ref);
+    return p ? `${p.name}${p.articleNumber ? ` (${p.articleNumber})` : ""}` : `«${ref}» — nicht im Inventar`;
+  }
+
+  function draftAlreadyBooked(draft) {
+    if (draft.type === "artikel") return inventory.some((p) => p.sourceDraftId === draft.id);
+    return Object.values(movementsByKey).some((list) => list.some((m) => m.ref?.draftId === draft.id));
+  }
+
+  // Bucht einen Entwurf. Ist er (z. B. nach einem Absturz zwischen Buchung
+  // und Statuswechsel) schon gebucht, wird er nur noch als übernommen markiert.
+  async function acceptDraft(draft) {
+    if (!draftAlreadyBooked(draft)) {
+      if (draft.type === "artikel") {
+        const p = draft.payload;
+        if (p.articleNumber && inventory.some((x) => (x.articleNumber || "").toLowerCase() === p.articleNumber.toLowerCase())) {
+          return [`Artikelnummer ${p.articleNumber} gibt es schon im Inventar.`];
+        }
+        await addProduct({
+          articleNumber: p.articleNumber || "",
+          name: p.name,
+          group: p.group || "",
+          price: p.price,
+          stock: "",
+          serialTracked: !!p.serialTracked,
+          shopText: p.shopText,
+          sourceDraftId: draft.id,
+        });
+      } else {
+        const product = findArticle(inventory, draft.payload.article);
+        if (!product) {
+          return [`Artikel «${draft.payload.article}» ist nicht im Inventar — bitte zuerst anlegen oder den Vorschlag verwerfen.`];
+        }
+        const serials = draft.payload.serials || [];
+        if (isSerialTracked(product) && serials.length === 0) {
+          return [`«${product.name}» ist seriennummernpflichtig — der Vorschlag enthält keine Seriennummern.`];
+        }
+        const entry = isSerialTracked(product)
+          ? { productId: product.id, serials }
+          : { productId: product.id, quantity: draft.payload.quantity };
+        const result = receiveGoods(
+          { inventory, units },
+          { ...entry, purchasePrice: draft.payload.purchasePrice, note: draft.payload.note, draftId: draft.id },
+          { ...stockCtx(), source: "assistent" },
+          checkNewSerials
+        );
+        if (result.errors.length) return result.errors;
+        if (!(await commitStock(result))) return ["Speichern fehlgeschlagen — bitte erneut versuchen."];
+      }
+    }
+    const r = await desktopAssistant.setDraftStatus(draft.id, "übernommen");
+    return r.ok ? [] : [r.error];
+  }
+
+  async function rejectDraft(draft) {
+    await desktopAssistant.setDraftStatus(draft.id, "verworfen");
   }
 
   async function updateUnitNote(unitId, note) {
@@ -1618,6 +1694,14 @@ export default function ReceiptApp() {
             {desktopShop && (
               <NavItem icon={Store} label="Shop-Anbindung" active={tab === "shop"} onClick={() => setTab("shop")} />
             )}
+            {desktopAssistant && (
+              <NavItem
+                icon={Bot}
+                label={openDraftCount ? `Assistent (${openDraftCount})` : "Assistent"}
+                active={tab === "assistant"}
+                onClick={() => setTab("assistant")}
+              />
+            )}
             <NavItem icon={Building2} label="Firma" active={tab === "company"} onClick={() => setTab("company")} />
             <NavItem icon={History} label="Verlauf" active={tab === "history"} onClick={() => setTab("history")} />
             <NavItem icon={Wallet} label="Buchhaltung" active={tab === "accounting"} onClick={() => setTab("accounting")} />
@@ -1649,6 +1733,7 @@ export default function ReceiptApp() {
               ...(tab === "accounting" ? { maxWidth: 880 } : {}),
               // Artikeltabelle, Exemplare und Bewegungen brauchen mehr Breite.
               ...(tab === "inventory" ? { maxWidth: 1040 } : {}),
+              ...(tab === "shop" || tab === "assistant" ? { maxWidth: 880 } : {}),
             }}
           >
             {tab === "new" && (
@@ -2747,6 +2832,16 @@ export default function ReceiptApp() {
                     </div>
                   ))
                 )}
+              </div>
+            )}
+
+            {tab === "assistant" && desktopAssistant && (
+              <div style={styles.panel}>
+                <Eyebrow>Assistent</Eyebrow>
+                <h1 style={styles.h1}>Vorschläge des Assistenten</h1>
+                <Vorschlaege drafts={drafts} describeArticle={describeDraftArticle} onAccept={acceptDraft} onReject={rejectDraft} />
+                <h2 style={{ ...styles.h1, fontSize: 20, marginTop: 40 }}>Lokale Schnittstelle</h2>
+                <Schnittstelle />
               </div>
             )}
 
