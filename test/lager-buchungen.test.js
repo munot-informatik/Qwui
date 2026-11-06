@@ -90,7 +90,7 @@ describe("Verkauf per Quittung", () => {
     const sold = r.units.find((u) => u.id === unit.id);
     expect(sold).toMatchObject({ status: "verkauft", receiptId: "r1", receiptNumber: 7, customerId: "c1" });
     expect(r.inventory[0].stock).toBe(2);
-    expect(r.receipt.stockBooking).toEqual([{ productId: "q", unitId: unit.id, serial: "S-2", qty: 1 }]);
+    expect(r.receipt.stockBooking).toEqual([{ productId: "q", unitId: unit.id, serial: "S-2", qty: 1, prevStatus: "an_lager" }]);
     expect(r.movements[0]).toMatchObject({ type: "verkauf", qty: -1, serial: "S-2", ref: { receiptNumber: 7 } });
   });
 

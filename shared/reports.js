@@ -118,8 +118,12 @@ export function salesReport(receipts, inventory, { from, to, group = "" } = {}) 
     if (r.qrBillEnabled && !r.paid) open += sum;
     for (const it of items) {
       if (itemKind(it) !== "product") continue;
-      const key = it.articleNumber || it.description || "";
-      const entry = top.get(key) || { articleNumber: it.articleNumber || "", name: it.description || "", quantity: 0, revenue: 0 };
+      // Name aus dem Inventar, nie aus dem Beschreibungsfeld: Das ist Freitext
+      // und kann Namen oder Telefonnummern enthalten.
+      const p = it.productId ? byId.get(it.productId) : (inventory || []).find((x) => x.articleNumber && x.articleNumber === it.articleNumber);
+      const articleNumber = p?.articleNumber || "";
+      const key = p ? p.id : "(freie Position)";
+      const entry = top.get(key) || { articleNumber, name: p ? p.name || "" : "(freie Position)", quantity: 0, revenue: 0 };
       entry.quantity += itemQuantity(it);
       entry.revenue = round2(entry.revenue + itemLineTotal(it));
       top.set(key, entry);
@@ -155,11 +159,14 @@ export function slowMovers(inventory, units, movements, { days = 90, now = new D
       };
     })
     .sort((a, b) => b.daysInStock - a.daysInStock);
-  const soldRecently = new Set(
-    (movements || []).filter((m) => m.type === MOVEMENT_TYPE.sale && m.at >= cutoff).map((m) => m.productId)
+  // Auch ein frischer Wareneingang ist kein Ladenhüter.
+  const activeRecently = new Set(
+    (movements || [])
+      .filter((m) => (m.type === MOVEMENT_TYPE.sale || m.type === MOVEMENT_TYPE.goodsIn) && m.at >= cutoff)
+      .map((m) => m.productId)
   );
   const articles = (inventory || [])
-    .filter((p) => !isSerialTracked(p) && (Number(p.stock) || 0) > 0 && !soldRecently.has(p.id))
+    .filter((p) => !isSerialTracked(p) && (Number(p.stock) || 0) > 0 && !activeRecently.has(p.id))
     .map((p) => ({ articleNumber: p.articleNumber || "", name: p.name || "", available: Number(p.stock) || 0, price: round2(p.price) }));
   return { days, units: unitsOld, articles };
 }

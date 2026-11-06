@@ -24,6 +24,40 @@ export function itemQuantity(it) {
   return Number.isFinite(q) && q > 0 ? q : 1;
 }
 
+// Eingabe im Mengenfeld als ganze Stückzahl ab 1. Leer, 0, negativ oder Text
+// ergeben 1 — dieselbe Regel wie itemQuantity, nur dass das Feld danach auch
+// zeigt, womit gerechnet wird.
+export function normalizeQuantity(value) {
+  const q = Math.round(Number(value));
+  return Number.isFinite(q) && q >= 1 ? q : 1;
+}
+
+// Nur Positionen mit Beschreibung und Betrag über 0 kommen auf den Beleg.
+export function isCompleteItem(it) {
+  return !!String(it?.description ?? "").trim() && Number(it?.amount) > 0;
+}
+
+// Zahl aus einer Excel-Zelle: null, wenn die Zelle leer oder keine Zahl ist —
+// nicht 0. Sonst würde eine leere Zelle Bestand und Preis auf 0 setzen.
+export function parseNumberCell(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const text = typeof value === "string" ? value.trim().replace(/['’\s]/g, "") : value;
+  if (text === "") return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Nächste Quittungsnummer: höher als alles, was je vergeben wurde. lastUsed
+// merkt sich auch gelöschte Nummern — Protokoll und Retouren verweisen darauf,
+// und eine Nummer darf nicht ein zweites Mal für einen anderen Beleg stehen.
+export function nextReceiptNumber(receipts, lastUsed = 0) {
+  const highest = (receipts || []).reduce((max, r) => {
+    const n = parseInt(r.number, 10);
+    return Number.isFinite(n) && n > max ? n : max;
+  }, Number(lastUsed) || 0);
+  return String(highest + 1).padStart(4, "0");
+}
+
 export function itemUnitPrice(it) {
   return Number(it?.amount) || 0;
 }

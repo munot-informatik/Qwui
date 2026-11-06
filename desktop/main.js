@@ -275,6 +275,7 @@ if (!gotLock) {
       units: await read("serial-units", []),
       movementsByKey,
       settings: { smtp: readSmtpSettings(), backup: { dir, enabled } },
+      lastReceiptNumber: await read("receipt-last-number", 0),
     });
   }
 
@@ -337,11 +338,15 @@ if (!gotLock) {
   // auf dem neuen PC neu eingegeben werden).
   ipcMain.handle("backup:restoreSettings", async (_event, settings) => {
     if (settings?.smtp && validateSmtpSettings(settings.smtp).length === 0) {
+      const current = readSmtpSettings();
       const next = { ...emptySmtpSettings };
       for (const key of Object.keys(emptySmtpSettings)) {
         if (settings.smtp[key] !== undefined) next[key] = settings.smtp[key];
       }
       store.setMeta(SMTP_SETTINGS_META, next);
+      // Das gespeicherte Passwort gehört zu diesem Server und Benutzer. Es darf
+      // nicht an einen anderen Server gehen.
+      if (next.host !== current.host || next.user !== current.user) secrets.delete(SMTP_PASSWORD_SECRET);
     }
     if (settings?.backup) {
       store.setMeta(BACKUP_CONFIG_META, { enabled: !!settings.backup.enabled, dir: String(settings.backup.dir || "") });
@@ -438,6 +443,9 @@ if (!gotLock) {
       readStatus: () => store.getMeta(SHOP_STATUS_META),
       writeStatus: (status) => store.setMeta(SHOP_STATUS_META, status),
     });
+    // Beim Start nachholen, was offen ist: Wiederholungen leben nur im Speicher,
+    // ein vor dem Schliessen gescheiterter Abgleich ginge sonst vergessen.
+    shopSync.trigger();
   }
 
   // ---- Lokale Schnittstelle für den Assistenten (nur Desktop) ----
@@ -493,8 +501,10 @@ if (!gotLock) {
 
   // Für backup_status: Zeitpunkte und Ergebnis, ohne Ordnerpfad.
   function backupStatusForAssistant() {
-    const { notReady, status } = backupState();
-    const brief = (s) => (s ? { zuletztErfolgreich: s.lastSuccessAt || null, letzterVersuch: s.at || null, ok: !!s.ok, fehler: s.ok ? null : s.error || null } : null);
+    const { notReady, status, config } = backupState();
+    // Fehlermeldungen nennen den Ordnerpfad (mit dem Windows-Benutzernamen).
+    const withoutPath = (text) => (text && config.dir ? String(text).split(config.dir).join("[Zielordner]") : text);
+    const brief = (s) => (s ? { zuletztErfolgreich: s.lastSuccessAt || null, letzterVersuch: s.at || null, ok: !!s.ok, fehler: s.ok ? null : withoutPath(s.error) || null } : null);
     return { aktiv: !notReady, hinweis: notReady, stuendlich: brief(status.stuendlich), taeglich: brief(status.taeglich) };
   }
 

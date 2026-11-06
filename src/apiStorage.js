@@ -32,10 +32,13 @@ async function rawGet(key, shared) {
 }
 
 async function rawSet(key, value, shared) {
+  const body = JSON.stringify({ key, value, shared });
   const res = await fetch(`/api/storage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, value, shared }),
+    body,
+    // Kleine Werte kommen auch noch an, wenn die Seite gerade geschlossen wird.
+    keepalive: body.length < 60000,
   });
   if (!res.ok) {
     throw new Error(`storage.set fehlgeschlagen: ${res.status}`);

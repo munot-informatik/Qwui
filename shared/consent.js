@@ -25,6 +25,21 @@ export function withoutUnconsentedEmail(person) {
   return { ...person, email: "" };
 }
 
+// Kopie des Kunden für eine Quittung. Beim Bearbeiten bleibt eine Adresse, die
+// schon auf dem Beleg stand, unverändert stehen: Es kommt nichts Neues hinzu,
+// und eine Tippfehler-Korrektur soll keine Angaben auf dem Beleg löschen.
+export function receiptCustomerSnapshot(person, existingCustomer) {
+  if (existingCustomer?.email && existingCustomer.email === person?.email) return person;
+  return withoutUnconsentedEmail(person);
+}
+
+// Fehlermeldungen von Mailservern nennen oft die Empfänger-Adresse. Solche Texte
+// werden an der Quittung gespeichert und landen in Backups — dort darf ohne
+// Einverständnis keine Adresse stehen.
+export function redactEmails(text) {
+  return String(text ?? "").replace(/[^\s<>()",;:]+@[^\s<>()",;:]+/g, "[Adresse]");
+}
+
 // Grobe Prüfung einer E-Mail-Adresse vor dem Versand (dieselbe Regel wie in
 // desktop/mailer.js, das vor dem Senden noch einmal prüft).
 export function isValidEmail(address) {

@@ -124,6 +124,16 @@ Rückfallwerte.
 - Der WhatsApp-Text nannte den Listenpreis statt des verrechneten Betrags
   (Rabatte fehlten).
 - Der Backup-Reiter zeigt nach einem Import die Erfolgsmeldung.
+- Das Total auf Quittung und QR-Rechnung zählte auch Zeilen ohne Beschreibung
+  oder mit negativem Betrag mit, die gar nicht auf den Beleg kamen. Das Formular
+  weist neu auf solche Zeilen hin.
+- Nummern gelöschter Quittungen werden nicht mehr neu vergeben.
+- Ein fehlgeschlagenes Laden eines Firmenlogos entfernte es beim nächsten
+  Speichern dauerhaft von den Quittungen.
+- Im Inventar-Excel-Import setzten leere Zellen Stückzahl und Preis auf 0; sie
+  gelten jetzt als «keine Angabe».
+- Eine beim Schliessen des Fensters noch nicht gespeicherte Eingabe in der
+  Inventartabelle ging verloren.
 
 ## 1.1.0 — 25. August 2026
 

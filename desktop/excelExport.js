@@ -99,7 +99,9 @@ export function buildEvaluationWorkbook({ customers = [], receipts = [], invento
         vat: r.vatEnabled ? "Ja" : "Nein",
         status: statusInfo(r).label,
         due: r.qrBillEnabled && r.date ? addDaysISO(r.date, paymentTermOf(r)) : "",
-        mail: r.emailDelivery ? `${r.emailDelivery.status} ${dateOnly(r.emailDelivery.at)}` : "",
+        mail: r.emailDelivery
+          ? `${r.emailDelivery.status} ${dateOnly(r.emailDelivery.at)}${r.emailDelivery.beforeEdit ? " (frühere Fassung)" : ""}`
+          : "",
       }))
   );
   // Ampelfarbe wie im bisherigen Sheet "Zahlungen".

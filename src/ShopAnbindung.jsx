@@ -48,7 +48,12 @@ export default function ShopAnbindung() {
   async function save() {
     setBusy(true);
     setMessage(null);
-    const result = await api.saveConfig(config, removeToken ? "" : token || null);
+    let result;
+    try {
+      result = await api.saveConfig(config, removeToken ? "" : token || null);
+    } catch (e) {
+      result = { ok: false, error: e.message || String(e) };
+    }
     setBusy(false);
     if (!result.ok) {
       setMessage({ kind: "error", text: result.error });
@@ -63,7 +68,11 @@ export default function ShopAnbindung() {
   async function syncNow() {
     setBusy(true);
     setMessage(null);
-    apply(await api.syncNow());
+    try {
+      apply(await api.syncNow());
+    } catch (e) {
+      setMessage({ kind: "error", text: e.message || String(e) });
+    }
     setBusy(false);
   }
 

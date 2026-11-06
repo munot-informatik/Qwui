@@ -3,7 +3,9 @@
 // dadurch bekommen wiederkehrende Nutzer nach einem Deploy sofort die neue
 // index.html, statt beim ersten Aufruf noch die alte aus dem Cache zu sehen.
 // v2: lokale Schriften unter /fonts statt Google Fonts.
-const CACHE_NAME = "quittungs-tool-v2";
+// v3: Version 1.2.0 — die alte App-Hülle würde Quittungen ohne Lagerbuchung
+// erstellen.
+const CACHE_NAME = "quittungs-tool-v3";
 const ASSETS_TO_CACHE = ["./", "./index.html", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

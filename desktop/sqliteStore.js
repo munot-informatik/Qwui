@@ -110,6 +110,12 @@ export function openStore(dbPath, { storeLogo, loadLogo } = {}) {
     for (const receipt of receipts) {
       if (receipt?.company?.logoRef) {
         const logoDataUrl = await loadLogo(receipt.company.logoRef, receipt.company.logoMime);
+        // Datei nicht lesbar: Referenz behalten, sonst entfernt das nächste
+        // Speichern das Logo endgültig von dieser Quittung.
+        if (!logoDataUrl) {
+          restored.push({ ...receipt, company: { ...receipt.company, logoDataUrl: "" } });
+          continue;
+        }
         const company = { ...receipt.company, logoDataUrl };
         delete company.logoRef;
         delete company.logoMime;

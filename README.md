@@ -572,8 +572,9 @@ senden** prüft die Einstellungen sofort. Das Passwort liegt verschlüsselt in
 `geheim.bin` und wird in der App nie wieder angezeigt.
 
 **Versenden:** Beim Erstellen einer Quittung unter **Nach dem Erstellen** «Per
-E-Mail senden» und/oder «Drucken» wählen — E-Mail ist vorgewählt, sobald beim
-Kunden eine Adresse hinterlegt ist. In der Vorschau verschickt **Per E-Mail
+E-Mail senden» und/oder «Drucken» wählen — E-Mail ist vorgewählt, sobald eine
+Adresse bekannt ist. Bei gespeicherten Kunden gilt das nur mit Einverständnis;
+ohne lässt sich der Versand von Hand anhaken. In der Vorschau verschickt **Per E-Mail
 senden** jederzeit erneut. Ob der Versand geklappt hat (oder mit welcher
 Meldung er scheiterte), steht an der Quittung und im Verlauf.
 
@@ -582,9 +583,12 @@ mit Datum erfassen. Ohne Einverständnis wird die E-Mail-Adresse **nicht
 gespeichert** — weder beim Kunden noch auf der Quittung; sie dient nur dem einen
 Versand. Kunden aus Version 1.1 behalten ihre Adresse; die Kundenliste zeigt
 "Einverständnis fehlt" und bietet an, es zu erfassen oder die Adresse zu
-entfernen.
+entfernen. Fehlermeldungen des Mailservers werden an der Quittung ohne
+Adressen gespeichert.
 
-Die Web-Version bleibt beim bisherigen Weg (`mailto:`, Teilen-Dialog).
+Die Web-Version bleibt beim bisherigen Weg (`mailto:`, Teilen-Dialog). Fehlt auf
+der Quittung eine Adresse, lässt sie sich unter **Per E-Mail senden** für diesen
+Versand eintragen.
 
 ## 19. Automatische Sicherung (Windows)
 
@@ -609,7 +613,7 @@ lädt nichts hoch.
 
 **Wiederherstellen:** **Backup → Backup-Datei auswählen**, die `.qwuibak`-Datei
 wählen und das Backup-Passwort eingeben. Danach erscheint die gewohnte
-Vorschau. Einstellungen (SMTP-Server, Backup-Ordner) werden mit übernommen,
+Vorschau. Nur aus verschlüsselten Sicherungen werden auch Einstellungen (SMTP-Server, Backup-Ordner) werden mit übernommen,
 Passwörter müssen neu eingegeben werden. Die Web-Version kann verschlüsselte
 Sicherungen nicht öffnen; für die Übertragung Windows → Web bleibt «Alle Daten
 exportieren».

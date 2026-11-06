@@ -17,6 +17,7 @@ export function buildBackupPayload({
   units,
   movementsByKey,
   settings,
+  lastReceiptNumber,
   now = new Date().toISOString(),
 }) {
   const payload = {
@@ -30,6 +31,7 @@ export function buildBackupPayload({
     stockMovements: movementsByKey || {},
   };
   if (settings) payload.settings = settings;
+  if (lastReceiptNumber) payload.lastReceiptNumber = lastReceiptNumber;
   return payload;
 }
 

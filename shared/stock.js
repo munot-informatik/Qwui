@@ -121,6 +121,13 @@ export function bookReceipt({ inventory, units }, receipt, ctx) {
         errors.push(`«${product.name}» ist seriennummernpflichtig — bitte ein Exemplar wählen.`);
         continue;
       }
+      // Retoure aus dieser Quittung: Die Position bleibt als Beleg stehen, das
+      // Exemplar gehört aber nicht mehr zu ihr (evtl. längst weiterverkauft).
+      // Beim Bearbeiten nichts neu buchen — sonst liesse sich die Quittung
+      // nicht einmal mehr für einen Tippfehler in der Notiz speichern.
+      if (unit.receiptId !== receipt.id && unit.returnedFrom?.receiptId === receipt.id) {
+        continue;
+      }
       if (unit.productId !== product.id) {
         errors.push(`Seriennummer ${unit.serial} gehört nicht zu «${product.name}».`);
         continue;
@@ -146,7 +153,8 @@ export function bookReceipt({ inventory, units }, receipt, ctx) {
             }
           : u
       );
-      booking.push({ productId: product.id, unitId: unit.id, serial: unit.serial, qty: 1 });
+      // prevStatus: beim Storno zurück auf den Stand davor (z. B. reserviert).
+      booking.push({ productId: product.id, unitId: unit.id, serial: unit.serial, qty: 1, prevStatus: unit.status });
       movements.push(
         movement(ctx, {
           ...productMovementFields(product),
@@ -191,6 +199,7 @@ export function bookReceipt({ inventory, units }, receipt, ctx) {
 export function reverseReceipt({ inventory, units }, receipt, ctx) {
   const booking = Array.isArray(receipt?.stockBooking) ? receipt.stockBooking : [];
   const movements = [];
+  const warnings = [];
   let nextInventory = [...(inventory || [])];
   let nextUnits = [...(units || [])];
   const ref = { receiptId: receipt.id, receiptNumber: receipt.number ?? null, stornoOf: receipt.id };
@@ -209,11 +218,28 @@ export function reverseReceipt({ inventory, units }, receipt, ctx) {
       if (!stillSold) continue;
       nextUnits = nextUnits.map((u) =>
         u.id === line.unitId
-          ? { ...u, status: UNIT_STATUS.inStock, receiptId: null, receiptNumber: null, customerId: null, soldAt: null }
+          ? {
+              ...u,
+              status: line.prevStatus === UNIT_STATUS.reserved ? UNIT_STATUS.reserved : UNIT_STATUS.inStock,
+              receiptId: null,
+              receiptNumber: null,
+              customerId: null,
+              soldAt: null,
+            }
           : u
       );
       movements.push(
         movement(ctx, { ...fields, serial: line.serial || null, qty: 1, type: MOVEMENT_TYPE.reversal, ref })
+      );
+      continue;
+    }
+
+    // Der Artikel wurde nach dem Verkauf seriennummernpflichtig: Sein Bestand
+    // ergibt sich jetzt allein aus den Exemplaren. Eine Bewegung +n stünde im
+    // Protokoll, ohne dass sich am Bestand etwas ändert.
+    if (isSerialTracked(product)) {
+      warnings.push(
+        `«${product.name}» ist inzwischen seriennummernpflichtig — ${line.qty} Stück wurden nicht zurückgebucht. Exemplare bitte über den Wareneingang erfassen.`
       );
       continue;
     }
@@ -233,6 +259,7 @@ export function reverseReceipt({ inventory, units }, receipt, ctx) {
     units: nextUnits,
     receipt: rest,
     movements,
+    warnings,
   };
 }
 
@@ -245,7 +272,11 @@ export function rebookReceipt(state, oldReceipt, newReceipt, ctx) {
   if (booked.errors.length) {
     return { ...state, receipt: newReceipt, movements: [], errors: booked.errors, warnings: booked.warnings };
   }
-  return { ...booked, movements: [...reversed.movements, ...booked.movements] };
+  return {
+    ...booked,
+    movements: [...reversed.movements, ...booked.movements],
+    warnings: [...reversed.warnings, ...booked.warnings],
+  };
 }
 
 // ---- Wareneingang ----
@@ -257,9 +288,13 @@ export function receiveGoods({ inventory, units }, entry, ctx, checkSerials) {
   if (!product) {
     return { inventory, units, movements: [], errors: ["Artikel nicht gefunden."] };
   }
-  const ref = entry.draftId ? { draftId: entry.draftId } : {};
+  const note = String(entry.note || "").trim();
+  const ref = { ...(entry.draftId ? { draftId: entry.draftId } : {}), ...(note ? { note } : {}) };
   const purchasePrice =
     entry.purchasePrice === "" || entry.purchasePrice == null ? null : Number(entry.purchasePrice);
+  // Bei Artikeln ohne Exemplare der einzige Ort für den Einkaufspreis. Das
+  // Protokoll geht nie an Shop oder Assistent.
+  const priceField = Number.isFinite(purchasePrice) ? { purchasePrice } : {};
 
   if (isSerialTracked(product)) {
     const serials = (entry.serials || []).map((s) => String(s).trim());
@@ -290,14 +325,15 @@ export function receiveGoods({ inventory, units }, entry, ctx, checkSerials) {
         qty: 1,
         type: MOVEMENT_TYPE.goodsIn,
         ref,
+        ...priceField,
       })
     );
     return { inventory: syncSerialStock(inventory, nextUnits), units: nextUnits, movements, errors: [] };
   }
 
   const qty = Number(entry.quantity);
-  if (!Number.isFinite(qty) || qty <= 0) {
-    return { inventory, units, movements: [], errors: ["Bitte eine Menge grösser als 0 eingeben."] };
+  if (!Number.isInteger(qty) || qty <= 0) {
+    return { inventory, units, movements: [], errors: ["Bitte eine ganze Menge grösser als 0 eingeben."] };
   }
   const nextInventory = inventory.map((p) =>
     p.id === product.id ? { ...p, stock: (Number(p.stock) || 0) + qty } : p
@@ -305,7 +341,7 @@ export function receiveGoods({ inventory, units }, entry, ctx, checkSerials) {
   return {
     inventory: nextInventory,
     units,
-    movements: [movement(ctx, { ...productMovementFields(product), qty, type: MOVEMENT_TYPE.goodsIn, ref })],
+    movements: [movement(ctx, { ...productMovementFields(product), qty, type: MOVEMENT_TYPE.goodsIn, ref, ...priceField })],
     errors: [],
   };
 }

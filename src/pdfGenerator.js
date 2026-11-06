@@ -440,9 +440,18 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
       isProduct && it.articleNumber ? it.articleNumber : "",
       itemQuantity(it) !== 1 ? `à CHF ${chf(itemUnitPrice(it))}` : "",
     ].filter(Boolean);
+    // Passt der Zusatz nicht mehr neben die Beschreibung (z. B. neben den
+    // durchgestrichenen Listenpreis), kommt er auf eine eigene Zeile.
+    let metaOwnLine = "";
     if (meta.length) {
       const dw = font.widthOfTextAtSize(toWinAnsiSafe(descLines[0]), 9.5);
-      text(` · ${meta.join(" · ")}`, MARGIN + dw, y, { size: 8, color: COLOR.lightGray });
+      const metaText = ` · ${meta.join(" · ")}`;
+      const mw = font.widthOfTextAtSize(toWinAnsiSafe(metaText), 8);
+      if (MARGIN + dw + mw <= descMaxRight - mm(2)) {
+        text(metaText, MARGIN + dw, y, { size: 8, color: COLOR.lightGray });
+      } else {
+        metaOwnLine = meta.join(" · ");
+      }
     }
 
     if (disc > 0) {
@@ -476,6 +485,11 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
       text(l, MARGIN, y, { size: 9.5 });
       y -= 10;
     });
+
+    if (metaOwnLine) {
+      text(metaOwnLine, MARGIN, y, { size: 8, color: COLOR.lightGray });
+      y -= 10;
+    }
 
     // Seriennummer des verkauften Exemplars — Grundlage für jeden späteren
     // Garantiefall, deshalb auf dem Beleg selbst und nicht nur in Qwui.

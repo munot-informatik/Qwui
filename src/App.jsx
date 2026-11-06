@@ -14,6 +14,10 @@ import {
   itemLineTotal,
   formatPercent,
   quantityPrefix,
+  normalizeQuantity,
+  isCompleteItem,
+  parseNumberCell,
+  nextReceiptNumber,
 } from "../shared/items.js";
 import {
   MOVEMENTS_PREFIX,
@@ -37,6 +41,8 @@ import {
   withoutUnconsentedEmail,
   hasLegacyEmailWithoutConsent,
   isValidEmail,
+  receiptCustomerSnapshot,
+  redactEmails,
 } from "../shared/consent.js";
 
 import { buildBackupPayload, looksLikeBackup, isEncryptedBackup } from "../shared/backupFormat.js";
@@ -90,6 +96,8 @@ const KEYS = {
   // Lagerbewegungen liegen pro Jahr unter "stock-movements-JJJJ" (siehe
   // shared/stock.js, movementsKey).
   units: "serial-units",
+  // Höchste je vergebene Quittungsnummer, auch von gelöschten Quittungen.
+  lastNumber: "receipt-last-number",
 };
 
 const emptyCompany = {
@@ -243,18 +251,6 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Nächste freie Quittungsnummer: höchste bisher vergebene Nummer + 1, statt
-// receipts.length + 1 — sonst würden nach dem Löschen einer Quittung
-// Nummern doppelt vergeben (z.B. Löschen von Nr. 0003 bei 5 Quittungen würde
-// die nächste neue Quittung wieder auf 0004 setzen, obwohl das schon vergeben ist).
-function nextReceiptNumber(receipts) {
-  const maxNumber = receipts.reduce((max, r) => {
-    const n = parseInt(r.number, 10);
-    return Number.isFinite(n) && n > max ? n : max;
-  }, 0);
-  return String(maxNumber + 1).padStart(4, "0");
-}
-
 function formatDateTimeDE(iso) {
   const d = new Date(iso);
   if (!iso || Number.isNaN(d.getTime())) return "";
@@ -306,6 +302,7 @@ export default function ReceiptApp() {
   const [receipts, setReceipts] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [units, setUnits] = useState([]);
+  const [lastNumber, setLastNumber] = useState(0);
   // Lagerbewegungen, nach Jahres-Schlüssel: { "stock-movements-2027": [...] }
   const [movementsByKey, setMovementsByKey] = useState({});
   // Meldungen der Lagerbuchung beim Erstellen/Bearbeiten einer Quittung:
@@ -332,6 +329,12 @@ export default function ReceiptApp() {
   const [mailState, setMailState] = useState({ state: "idle", to: "", error: "" });
 
   const [newCustomer, setNewCustomer] = useState(emptyPerson);
+
+  // Immer der neueste Stand, auch für Code, der nach einem langen await
+  // weiterläuft (z. B. der Mailversand) — dessen Closure kennt nur den Stand
+  // von vor dem await und würde später Geändertes wieder überschreiben.
+  const latest = useRef({});
+  latest.current = { receipts, inventory, units, movementsByKey, lastNumber, currentReceipt };
 
   useEffect(() => {
     (async () => {
@@ -378,6 +381,8 @@ export default function ReceiptApp() {
           if (m && m.value) loadedMovements[key] = JSON.parse(m.value);
         }
         setMovementsByKey(loadedMovements);
+        const last = await window.storage.get(KEYS.lastNumber);
+        if (last && last.value) setLastNumber(Number(JSON.parse(last.value)) || 0);
       } catch (e) {
         console.error("Laden der Exemplare/Lagerbewegungen fehlgeschlagen", e);
         loadFailed = true;
@@ -398,6 +403,8 @@ export default function ReceiptApp() {
   // Fehler weiterhin nur über das persistError-Banner an.
   async function persist(key, value, setter) {
     setter(value);
+    if (key === KEYS.receipts) latest.current.receipts = value;
+    if (key === KEYS.inventory) latest.current.inventory = value;
     try {
       await window.storage.set(key, JSON.stringify(value), false);
       setPersistError("");
@@ -412,11 +419,17 @@ export default function ReceiptApp() {
   // Speichert eine Lagerbuchung in EINEM Schritt (storage.setMany): neues
   // Inventar, Exemplare, angehängte Lagerbewegungen und optional weitere
   // Listen (z. B. die Quittungen). So können Quittung und Bestand nie
-  // auseinanderlaufen, auch wenn das Speichern mittendrin scheitert.
-  // extra: [{ key, value, setter }]
+  // auseinanderlaufen, auch wenn das Speichern mittendrin scheitert. Schlägt es
+  // fehl, geht auch die Anzeige auf den alten Stand zurück — sonst zeigte die
+  // App eine Buchung, die es in der Datenbank nicht gibt.
+  // extra: [{ key, value, setter, previous }]
   async function commitStock({ inventory: nextInventory, units: nextUnits, movements = [], extra = [] }) {
+    const pendingEdit = pendingInventory.current;
     cancelPendingInventorySave();
-    const appended = appendMovements(movementsByKey, movements);
+    const before = latest.current;
+    const previousMovements = before.movementsByKey;
+    const appended = appendMovements(previousMovements, movements);
+    const mergedMovements = { ...previousMovements, ...appended };
     const entries = [
       { key: KEYS.inventory, value: nextInventory },
       { key: KEYS.units, value: nextUnits },
@@ -425,8 +438,13 @@ export default function ReceiptApp() {
     ];
     setInventory(nextInventory);
     setUnits(nextUnits);
-    if (movements.length) setMovementsByKey((prev) => ({ ...prev, ...appended }));
+    if (movements.length) setMovementsByKey(mergedMovements);
     extra.forEach(({ value, setter }) => setter && setter(value));
+    latest.current = { ...before, inventory: nextInventory, units: nextUnits, movementsByKey: mergedMovements };
+    extra.forEach(({ key, value }) => {
+      if (key === KEYS.receipts) latest.current.receipts = value;
+      if (key === KEYS.lastNumber) latest.current.lastNumber = value;
+    });
     try {
       await window.storage.setMany(entries.map(({ key, value }) => ({ key, value: JSON.stringify(value) })));
       setPersistError("");
@@ -434,8 +452,25 @@ export default function ReceiptApp() {
     } catch (e) {
       console.error("Speichern der Lagerbuchung fehlgeschlagen", e);
       setPersistError(`Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
+      setInventory(before.inventory);
+      setUnits(before.units);
+      setMovementsByKey(previousMovements);
+      extra.forEach(({ setter, previous }) => setter && setter(previous));
+      latest.current = before;
+      // Noch nicht gespeicherte Eingaben in der Inventartabelle nicht verlieren.
+      if (pendingEdit) scheduleInventorySave(pendingEdit);
       return false;
     }
+  }
+
+  // Quittungsliste und höchste vergebene Nummer als Teil einer Lagerbuchung.
+  function receiptsExtra(nextReceipts, usedNumber) {
+    const extra = [{ key: KEYS.receipts, value: nextReceipts, setter: setReceipts, previous: latest.current.receipts }];
+    const n = parseInt(usedNumber, 10);
+    if (Number.isFinite(n) && n > latest.current.lastNumber) {
+      extra.push({ key: KEYS.lastNumber, value: n, setter: setLastNumber, previous: latest.current.lastNumber });
+    }
+    return extra;
   }
 
   function stockCtx() {
@@ -511,7 +546,9 @@ export default function ReceiptApp() {
       return;
     }
     setEncryptedImport(null);
-    setImportPreview(parsed);
+    // Nur eine mit dem Passwort geöffnete Sicherung darf Einstellungen setzen:
+    // Eine untergeschobene JSON-Datei könnte sonst den SMTP-Server umbiegen.
+    setImportPreview({ ...parsed, __fromEncrypted: true });
   }
 
   const [evaluationStatus, setEvaluationStatus] = useState("");
@@ -524,7 +561,7 @@ export default function ReceiptApp() {
   }
 
     function exportAllData() {
-    const payload = buildBackupPayload({ company, customers, receipts, inventory, units, movementsByKey });
+    const payload = buildBackupPayload({ company, customers, receipts, inventory, units, movementsByKey, lastReceiptNumber: lastNumber });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -586,6 +623,11 @@ export default function ReceiptApp() {
       const okInventory = Array.isArray(importPreview.inventory)
         ? await persist(KEYS.inventory, importPreview.inventory, setInventory)
         : true;
+      // Gelöschte Nummern bleiben vergeben — auch nach einem Import.
+      const importedLast = Number(importPreview.lastReceiptNumber) || 0;
+      if (importedLast > latest.current.lastNumber) {
+        await persist(KEYS.lastNumber, importedLast, setLastNumber);
+      }
       // Ab 1.2.0: Exemplare und Lagerbewegungen. Fehlen sie (Backup aus einer
       // älteren Version), bleiben die vorhandenen stehen — die Vorschau warnt.
       let okStock = true;
@@ -619,7 +661,7 @@ export default function ReceiptApp() {
         // Backup-Ordner übernehmen, Passwörter sind darin nie enthalten. Erst
         // nach geglücktem Import — sonst stünden neue Einstellungen neben den
         // alten Daten.
-        if (desktopBackup && importPreview.settings) {
+        if (desktopBackup && importPreview.settings && importPreview.__fromEncrypted) {
           await desktopBackup.restoreSettings(importPreview.settings);
         }
         setImportPreview(null);
@@ -799,7 +841,7 @@ export default function ReceiptApp() {
     };
     const initial = serialTracked ? 0 : Number(fields.stock) || 0;
     const result = correctStock({ inventory: [...inventory, entry], units }, entry.id, initial, stockCtx(), "Anfangsbestand");
-    await commitStock(result);
+    if (!(await commitStock(result))) return null;
     if (fields === newProduct) setNewProduct(emptyProduct);
     return entry;
   }
@@ -807,7 +849,8 @@ export default function ReceiptApp() {
   // Neue Zählmenge von Hand (nur Artikel ohne Seriennummernpflicht).
   async function setProductStock(id, value) {
     const result = correctStock({ inventory, units }, id, value, stockCtx());
-    if (result.movements.length) await commitStock(result);
+    if (!result.movements.length) return true;
+    return commitStock(result);
   }
 
   // Seriennummernpflicht nur umschalten, solange es nicht zu Widersprüchen
@@ -885,7 +928,7 @@ export default function ReceiptApp() {
         if (p.articleNumber && inventory.some((x) => (x.articleNumber || "").toLowerCase() === p.articleNumber.toLowerCase())) {
           return [`Artikelnummer ${p.articleNumber} gibt es schon im Inventar.`];
         }
-        await addProduct({
+        const created = await addProduct({
           articleNumber: p.articleNumber || "",
           name: p.name,
           group: p.group || "",
@@ -895,6 +938,7 @@ export default function ReceiptApp() {
           shopText: p.shopText,
           sourceDraftId: draft.id,
         });
+        if (!created) return ["Speichern fehlgeschlagen — bitte erneut versuchen."];
       } else {
         const product = findArticle(inventory, draft.payload.article);
         if (!product) {
@@ -957,16 +1001,24 @@ export default function ReceiptApp() {
   }
 
   // Ausstehende Änderung noch sichern, wenn die Seite geschlossen wird.
+  // pagehide statt Effekt-Aufräumen: Beim Schliessen von Tab oder Fenster führt
+  // React keine Aufräumfunktionen mehr aus.
   useEffect(() => {
-    return () => {
-      if (inventorySaveTimer.current) {
-        clearTimeout(inventorySaveTimer.current);
-        if (pendingInventory.current) {
-          window.storage
-            .set(KEYS.inventory, JSON.stringify(pendingInventory.current), false)
-            .catch((e) => console.error("Inventar-Speichern beim Verlassen fehlgeschlagen", e));
-        }
+    function flush() {
+      if (!inventorySaveTimer.current) return;
+      clearTimeout(inventorySaveTimer.current);
+      inventorySaveTimer.current = null;
+      if (pendingInventory.current) {
+        window.storage
+          .set(KEYS.inventory, JSON.stringify(pendingInventory.current), false)
+          .catch((e) => console.error("Inventar-Speichern beim Verlassen fehlgeschlagen", e));
+        pendingInventory.current = null;
       }
+    }
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
     };
   }, []);
 
@@ -1056,7 +1108,8 @@ export default function ReceiptApp() {
       // danach als Inventurkorrektur gebucht (targets). Bei
       // seriennummernpflichtigen Artikeln zählt allein die Anzahl Exemplare —
       // ihre Stückzahl in der Datei wird ignoriert.
-      const next = [...inventory];
+      // latest statt der Werte von vor den awaits (Datei lesen, xlsx laden).
+      const next = [...latest.current.inventory];
       const targets = new Map();
       let added = 0;
       let updated = 0;
@@ -1064,8 +1117,10 @@ export default function ReceiptApp() {
         const name = String(pick(row, "Artikel-Name", "Artikelname", "Name")).trim();
         const articleNumber = String(pick(row, "Artikelnummer", "Artikel-Nr.", "Nr.")).trim();
         if (!name && !articleNumber) continue;
-        const stock = Number(pick(row, "Stückzahl verfügbar", "Stückzahl", "Bestand")) || 0;
-        const price = Number(pick(row, "Preis (CHF)", "Preis")) || 0;
+        // Leere Zelle = keine Angabe. Sie darf weder Bestand noch Preis auf 0 setzen.
+        const stockCell = parseNumberCell(pick(row, "Stückzahl verfügbar", "Stückzahl", "Bestand"));
+        const stock = stockCell === null ? null : Math.round(stockCell);
+        const price = parseNumberCell(pick(row, "Preis (CHF)", "Preis"));
         // Ältere Exportdateien haben keine Gruppenspalte — dann bleibt die
         // bisherige Gruppe des Artikels erhalten statt gelöscht zu werden.
         const hasGroupColumn = Object.keys(row).some((k) =>
@@ -1080,24 +1135,24 @@ export default function ReceiptApp() {
             ...next[idx],
             name: name || next[idx].name,
             group: hasGroupColumn ? group : next[idx].group || "",
-            price,
+            price: price === null ? next[idx].price : price,
           };
-          if (!isSerialTracked(next[idx])) targets.set(next[idx].id, stock);
+          if (stock !== null && !isSerialTracked(next[idx])) targets.set(next[idx].id, stock);
           updated++;
         } else {
           // Seriennummernpflicht nur bei neuen Artikeln aus der Datei lesen —
           // bei bestehenden würde ein Umschalten die Exemplare durcheinanderbringen.
           const serialTracked = /^(ja|x|1|true)$/i.test(String(pick(row, "Seriennummernpflichtig")).trim());
-          const entry = { id: uid(), articleNumber, name, group, stock: 0, price, serialTracked };
+          const entry = { id: uid(), articleNumber, name, group, stock: 0, price: price ?? 0, serialTracked };
           next.push(entry);
-          if (!serialTracked) targets.set(entry.id, stock);
+          if (stock !== null && !serialTracked) targets.set(entry.id, stock);
           added++;
         }
       }
       if (!added && !updated) {
         throw new Error("Keine gültigen Zeilen gefunden (erwartet: Artikelnummer, Artikel-Name, Stückzahl verfügbar, Preis).");
       }
-      let state = { inventory: next, units, movements: [] };
+      let state = { inventory: next, units: latest.current.units, movements: [] };
       const ctx = stockCtx();
       for (const [id, target] of targets) {
         const r = correctStock(state, id, target, ctx, "Excel-Import");
@@ -1200,7 +1255,7 @@ export default function ReceiptApp() {
     const takenElsewhere = new Set(items.filter((x) => x.id !== it.id && x.unitId).map((x) => x.unitId));
     return units
       .filter((u) => u.productId === product.id && !takenElsewhere.has(u.id))
-      .filter((u) => isSellable(u) || (editingReceiptId && u.receiptId === editingReceiptId))
+      .filter((u) => isSellable(u) || u.id === it.unitId || (editingReceiptId && u.receiptId === editingReceiptId))
       .sort((a, b) => (a.serial || "").localeCompare(b.serial || "", "de-CH"));
   }
 
@@ -1208,10 +1263,16 @@ export default function ReceiptApp() {
 
   // Summiert die Positionen NACH Rabatt — der eingegebene Betrag ist der
   // Listenpreis, verrechnet wird der reduzierte Betrag.
-  const enteredSum = items.reduce((sum, it) => sum + itemLineTotal(it), 0);
+  // Nur Positionen, die auch auf den Beleg kommen — sonst stünde ein Total auf
+  // Quittung und QR-Rechnung, das nicht zu den Positionen passt.
+  const validItems = items.filter(isCompleteItem).map((it) => ({ ...it, quantity: normalizeQuantity(it.quantity) }));
+  const hasIncompleteItems = items.some(
+    (it) => !isCompleteItem(it) && (String(it.description ?? "").trim() || String(it.amount ?? "").trim())
+  );
+  const enteredSum = validItems.reduce((sum, it) => sum + itemLineTotal(it), 0);
   const total = round2(enteredSum);
-  const discountTotal = round2(items.reduce((sum, it) => sum + itemDiscountAmount(it), 0));
-  const listTotal = round2(items.reduce((sum, it) => sum + itemListPrice(it), 0));
+  const discountTotal = round2(validItems.reduce((sum, it) => sum + itemDiscountAmount(it), 0));
+  const listTotal = round2(validItems.reduce((sum, it) => sum + itemListPrice(it), 0));
   const netTotal = vatEnabled ? round2(total / (1 + VAT_RATE)) : total;
   const vatAmount = vatEnabled ? round2(total - netTotal) : 0;
 
@@ -1241,8 +1302,11 @@ export default function ReceiptApp() {
 
   const activeCustomer = getActiveCustomer();
   const deliveryAddress = (deliveryTo ?? activeCustomer.email ?? "").trim();
-  const wantsMail = !!desktopMail && (deliveryMail ?? !!deliveryAddress);
-  const validItems = items.filter((it) => it.description.trim() && Number(it.amount) > 0);
+  // Vorgabe E-Mail: bei gespeicherten Kunden nur mit Einverständnis (Kunden aus
+  // 1.1 haben noch eine Adresse ohne Einverständnis), sonst sobald jemand
+  // eine Adresse für diesen Versand eingetragen hat.
+  const defaultMail = selectedCustomerId && deliveryTo === null ? hasEmailConsent(activeCustomer) && !!deliveryAddress : !!deliveryAddress;
+  const wantsMail = !!desktopMail && (deliveryMail ?? defaultMail);
   const canCreate = activeCustomer.name.trim() && validItems.length > 0;
   const needsAddress = total >= 400;
 
@@ -1254,10 +1318,10 @@ export default function ReceiptApp() {
     // Die E-Mail-Adresse steht nur mit Einverständnis auf dem Beleg.
     if (selectedCustomerId) {
       const c = customers.find((x) => x.id === selectedCustomerId);
-      if (c) return withoutUnconsentedEmail({ ...c });
+      if (c) return receiptCustomerSnapshot({ ...c }, existing?.customer);
     }
     const keepId = existing && !customers.some((c) => c.id === existing.customer?.id) ? existing.customer?.id : "";
-    return withoutUnconsentedEmail({ ...activeCustomer, id: keepId || `m-${uid()}` });
+    return receiptCustomerSnapshot({ ...activeCustomer, id: keepId || `m-${uid()}` }, existing?.customer);
   }
 
   // Positionen so speichern, wie sie auf dem Beleg stehen: Menge als Zahl,
@@ -1279,12 +1343,38 @@ export default function ReceiptApp() {
     return !(result.errors && result.errors.length);
   }
 
+  // Sperre gegen Doppelklick: Im Web dauert das Speichern einen Netzwerk-Umweg,
+  // ein zweiter Klick ergäbe sonst eine zweite Quittung samt doppelter Buchung.
+  const creatingRef = useRef(false);
+  const [creating, setCreating] = useState(false);
+
   async function createReceipt() {
-    if (!canCreate) return;
+    if (!canCreate || creatingRef.current) return;
+    creatingRef.current = true;
+    setCreating(true);
+    let created = null;
+    try {
+      created = await saveReceiptFromForm();
+    } finally {
+      creatingRef.current = false;
+      setCreating(false);
+    }
+    // Erst nach der Sperre: Ein langer Mailversand soll die nächste Quittung
+    // nicht aufhalten.
+    if (created) await deliverAfterCreate(created);
+  }
+
+  async function saveReceiptFromForm() {
     const stockState = { inventory, units };
 
     if (editingReceiptId) {
       const existing = receipts.find((r) => r.id === editingReceiptId);
+      // Während des Bearbeitens im Verlauf gelöscht.
+      if (!existing) {
+        setStockErrors(["Diese Quittung wurde inzwischen gelöscht."]);
+        setEditingReceiptId(null);
+        return;
+      }
       const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban);
       // War die Quittung vorher schon eine QR-Rechnung, bleibt ihr Bezahlt-Status
       // erhalten. Wird sie beim Bearbeiten NEU zur QR-Rechnung (vorher
@@ -1318,25 +1408,29 @@ export default function ReceiptApp() {
         paid,
         note,
         editedAt: new Date().toISOString(),
+        // Der Kunde hat die frühere Fassung erhalten — das soll sichtbar bleiben.
+        ...(existing.emailDelivery ? { emailDelivery: { ...existing.emailDelivery, beforeEdit: true } } : {}),
       };
       // Alte Buchung stornieren, neue Fassung buchen — oder gar nichts.
       const booked = rebookReceipt(stockState, existing, draft, stockCtx());
       if (!showStockResult(booked)) return;
       const updated = booked.receipt;
       const next = receipts.map((r) => (r.id === editingReceiptId ? updated : r));
-      await commitStock({
+      const saved = await commitStock({
         inventory: booked.inventory,
         units: booked.units,
         movements: booked.movements,
-        extra: [{ key: KEYS.receipts, value: next, setter: setReceipts }],
+        extra: receiptsExtra(next),
       });
+      if (!saved) return;
+      setMailState({ state: "idle", to: "", error: "" });
       setCurrentReceipt(updated);
       setEditingReceiptId(null);
       setMode("preview");
       return;
     }
 
-    const number = nextReceiptNumber(receipts);
+    const number = nextReceiptNumber(receipts, lastNumber);
     const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban);
     const draft = {
       id: uid(),
@@ -1360,22 +1454,30 @@ export default function ReceiptApp() {
     if (!showStockResult(booked)) return;
     const receipt = booked.receipt;
     const next = [...receipts, receipt];
-    await commitStock({
+    const saved = await commitStock({
       inventory: booked.inventory,
       units: booked.units,
       movements: booked.movements,
-      extra: [{ key: KEYS.receipts, value: next, setter: setReceipts }],
+      extra: receiptsExtra(next, number),
     });
+    // Nicht gespeichert: im Formular bleiben, nichts versenden.
+    if (!saved) return;
     setCurrentReceipt(receipt);
     setMode("preview");
-    await deliverAfterCreate(receipt, next);
+    return receipt;
   }
 
-  // Zustellung, die im Formular gewählt wurde (nur Windows).
-  async function deliverAfterCreate(receipt, list) {
-    setMailState({ state: "idle", to: "", error: "" });
+  // Zustellung, die im Formular gewählt wurde (Windows). Im Web gibt es keine
+  // Wahl: Eine eingetippte Adresse ohne Einverständnis steht nicht auf der
+  // Quittung, deshalb steht sie zum Senden bereit, statt zu verschwinden.
+  async function deliverAfterCreate(receipt) {
+    setMailState(
+      !desktopMail && deliveryAddress && !receipt.customer.email
+        ? { state: "form", to: deliveryAddress, error: "" }
+        : { state: "idle", to: "", error: "" }
+    );
     const print = !!desktopMail && deliveryPrint;
-    if (wantsMail && deliveryAddress) await sendReceiptByMail(receipt, deliveryAddress, list);
+    if (wantsMail && deliveryAddress) await sendReceiptByMail(receipt, deliveryAddress);
     // Drucken erst, wenn die Vorschau steht — gedruckt wird die Bildschirmansicht.
     if (print) setTimeout(() => printReceipt(receipt), 400);
   }
@@ -1384,7 +1486,7 @@ export default function ReceiptApp() {
     // Ab 1.2.0 über die Kunden-ID; ältere Belege kennen nur Name und E-Mail.
     const matchingCustomer =
       customers.find((c) => r.customer.id && c.id === r.customer.id) ||
-      customers.find((c) => c.name === r.customer.name && c.email === r.customer.email);
+      (!r.customer.id && customers.find((c) => c.name === r.customer.name && c.email === r.customer.email));
     if (matchingCustomer) {
       setSelectedCustomerId(matchingCustomer.id);
       setManualCustomer(emptyPerson);
@@ -1399,8 +1501,11 @@ export default function ReceiptApp() {
         city: r.customer.city || "",
         email: r.customer.email || "",
         phone: r.customer.phone || "",
+        emailConsent: r.customer.emailConsent || null,
       });
     }
+    setDeliveryMail(null);
+    setDeliveryTo(null);
     setDate(r.date);
     setItems(r.items.map((it) => ({ ...emptyItem(), ...it, quantity: String(itemQuantity(it)), id: uid() })));
     setStockErrors([]);
@@ -1420,17 +1525,21 @@ export default function ReceiptApp() {
   // nichts gebucht, dort ändert sich am Bestand nichts.
   async function deleteReceipt(id) {
     const existing = receipts.find((r) => r.id === id);
+    if (!existing) return;
     const next = receipts.filter((r) => r.id !== id);
-    if (existing && Array.isArray(existing.stockBooking) && existing.stockBooking.length) {
-      const reversed = reverseReceipt({ inventory, units }, existing, stockCtx());
-      await commitStock({
-        inventory: reversed.inventory,
-        units: reversed.units,
-        movements: reversed.movements,
-        extra: [{ key: KEYS.receipts, value: next, setter: setReceipts }],
-      });
-    } else {
-      await persist(KEYS.receipts, next, setReceipts);
+    const reversed = reverseReceipt({ inventory, units }, existing, stockCtx());
+    // Die Nummer bleibt vergeben, auch wenn die Quittung weg ist.
+    const saved = await commitStock({
+      inventory: reversed.inventory,
+      units: reversed.units,
+      movements: reversed.movements,
+      extra: receiptsExtra(next, existing.number),
+    });
+    if (!saved) return;
+    if (reversed.warnings.length) setPersistError(reversed.warnings.join(" "));
+    if (editingReceiptId === id) {
+      setEditingReceiptId(null);
+      resetForm();
     }
     if (currentReceipt && currentReceipt.id === id) {
       backToForm();
@@ -1492,18 +1601,18 @@ export default function ReceiptApp() {
     };
   }
 
-  function sendMail() {
+  function sendMail(to = currentReceipt?.customer.email || "") {
     if (!currentReceipt) return;
-    const to = currentReceipt.customer.email || "";
     const { subject, text } = mailContent(currentReceipt, false);
     window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
   }
 
   // Versendet die Quittung direkt per SMTP (Windows) und hält das Ergebnis an
   // der Quittung fest — ohne die Adresse, die ohne Einverständnis nirgends
-  // gespeichert werden darf. list: die Quittungsliste, in der die Quittung
-  // steht (direkt nach dem Erstellen ist der State noch nicht nachgeführt).
-  async function sendReceiptByMail(receipt, to, list = receipts) {
+  // gespeichert werden darf. Der Versand kann lange dauern: Das Ergebnis kommt
+  // deshalb in die dann aktuelle Liste, sonst gingen Änderungen von währenddessen
+  // verloren (eine neue Quittung, eine Löschung, eine Bearbeitung).
+  async function sendReceiptByMail(receipt, to) {
     // Ein Tippfehler in der Adresse ist kein Versandversuch — er soll einen
     // früheren erfolgreichen Versand an der Quittung nicht überschreiben.
     if (!isValidEmail(to)) {
@@ -1527,10 +1636,19 @@ export default function ReceiptApp() {
     }
     const emailDelivery = result.ok
       ? { status: "gesendet", at: new Date().toISOString() }
-      : { status: "fehlgeschlagen", at: new Date().toISOString(), error: result.error };
-    const updated = { ...receipt, emailDelivery };
-    await persist(KEYS.receipts, list.map((r) => (r.id === receipt.id ? updated : r)), setReceipts);
-    setCurrentReceipt((cur) => (cur && cur.id === receipt.id ? updated : cur));
+      : { status: "fehlgeschlagen", at: new Date().toISOString(), error: redactEmails(result.error) };
+    const current = latest.current.receipts;
+    if (current.some((r) => r.id === receipt.id)) {
+      await persist(
+        KEYS.receipts,
+        current.map((r) => (r.id === receipt.id ? { ...r, emailDelivery } : r)),
+        setReceipts
+      );
+    }
+    setCurrentReceipt((cur) => (cur && cur.id === receipt.id ? { ...cur, emailDelivery } : cur));
+    // Wer inzwischen eine andere Quittung offen hat, findet das Ergebnis im
+    // Verlauf — die Meldung gehört nicht auf den anderen Beleg.
+    if (latest.current.currentReceipt?.id !== receipt.id) return;
     setMailState(result.ok ? { state: "sent", to, error: "" } : { state: "error", to, error: result.error });
   }
 
@@ -1801,6 +1919,9 @@ export default function ReceiptApp() {
                       onChange={(e) => {
                         setSelectedCustomerId(e.target.value);
                         if (e.target.value) setManualCustomer(emptyPerson);
+                        // Die Versandadresse gehört zum bisherigen Empfänger.
+                        setDeliveryTo(null);
+                        setDeliveryMail(null);
                       }}
                       style={styles.select}
                     >
@@ -1984,6 +2105,7 @@ export default function ReceiptApp() {
                                   step="1"
                                   value={it.quantity ?? "1"}
                                   onChange={(e) => updateItem(it.id, "quantity", e.target.value)}
+                                  onBlur={(e) => updateItem(it.id, "quantity", String(normalizeQuantity(e.target.value)))}
                                   className="mono"
                                   style={{ width: 62, textAlign: "right" }}
                                   aria-label="Menge"
@@ -2162,6 +2284,12 @@ export default function ReceiptApp() {
                   </FieldGroup>
                 )}
 
+                {hasIncompleteItems && (
+                  <div style={{ ...styles.hint, marginBottom: 12 }}>
+                    Positionen ohne Beschreibung oder ohne Betrag über 0 kommen nicht auf den Beleg und zählen nicht zum Total.
+                  </div>
+                )}
+
                 {stockErrors.length > 0 && (
                   <div style={{ ...styles.hint, marginBottom: 12 }} role="alert">
                     {stockErrors.map((m, i) => (
@@ -2172,8 +2300,8 @@ export default function ReceiptApp() {
 
                 <button
                   onClick={createReceipt}
-                  disabled={!canCreate}
-                  style={{ ...styles.primaryBtn, opacity: canCreate ? 1 : 0.4 }}
+                  disabled={!canCreate || creating}
+                  style={{ ...styles.primaryBtn, opacity: canCreate && !creating ? 1 : 0.4 }}
                 >
                   {editingReceiptId ? "Änderungen speichern" : "Quittung erstellen →"}
                 </button>
@@ -2845,7 +2973,7 @@ export default function ReceiptApp() {
                         <div style={styles.muted}>
                           {formatDateDE(r.date)} · CHF {chf(r.total)}
                           {r.editedAt ? " · bearbeitet" : ""}
-                          {r.emailDelivery ? ` · E-Mail ${r.emailDelivery.status}` : ""}
+                          {r.emailDelivery ? ` · E-Mail ${r.emailDelivery.status}${r.emailDelivery.beforeEdit ? " (frühere Fassung)" : ""}` : ""}
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
@@ -2996,7 +3124,7 @@ export default function ReceiptApp() {
                         Exportiert am {formatDateDE(importPreview.exportedAt.slice(0, 10))}
                       </div>
                     )}
-                    {importPreview.settings && desktopBackup && (
+                    {importPreview.settings && importPreview.__fromEncrypted && desktopBackup && (
                       <div style={{ fontSize: 12, color: "#5B5F66", marginBottom: 12 }}>
                         Enthält Einstellungen (E-Mail-Versand, Sicherung) — sie werden übernommen. Passwörter
                         sind nicht enthalten und müssen neu eingegeben werden.
@@ -3048,24 +3176,17 @@ export default function ReceiptApp() {
                   <Share2 size={14} /> {sharing ? "Bereite vor…" : "Teilen"}
                 </button>
               )}
-              {desktopMail ? (
-                <button
-                  onClick={() => setMailState({ state: "form", to: currentReceipt.customer.email || "", error: "" })}
-                  style={styles.primaryBtnSmall}
-                  disabled={mailState.state === "sending"}
-                >
-                  <Mail size={14} /> {mailState.state === "sending" ? "Sende…" : "Per E-Mail senden"}
-                </button>
-              ) : (
-                <button
-                  onClick={sendMail}
-                  style={styles.primaryBtnSmall}
-                  disabled={!currentReceipt.customer.email}
-                  title={!currentReceipt.customer.email ? "Keine E-Mail-Adresse hinterlegt" : ""}
-                >
-                  <Mail size={14} /> Per E-Mail senden
-                </button>
-              )}
+              <button
+                onClick={() =>
+                  !desktopMail && currentReceipt.customer.email
+                    ? sendMail()
+                    : setMailState({ state: "form", to: mailState.to || currentReceipt.customer.email || "", error: "" })
+                }
+                style={styles.primaryBtnSmall}
+                disabled={mailState.state === "sending"}
+              >
+                <Mail size={14} /> {mailState.state === "sending" ? "Sende…" : "Per E-Mail senden"}
+              </button>
               <button onClick={sendWhatsApp} style={styles.whatsappBtn}>
                 <MessageCircle size={14} /> Per WhatsApp senden
               </button>
@@ -3078,7 +3199,7 @@ export default function ReceiptApp() {
               ))}
             </div>
           )}
-          {desktopMail && (mailState.state !== "idle" || currentReceipt.emailDelivery) && (
+          {(mailState.state !== "idle" || (desktopMail && currentReceipt.emailDelivery)) && (
             <div className="no-print" style={styles.mailBox}>
               {(mailState.state === "form" || mailState.state === "error") && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -3091,7 +3212,17 @@ export default function ReceiptApp() {
                     autoFocus
                   />
                   <button
-                    onClick={() => sendReceiptByMail(currentReceipt, mailState.to.trim())}
+                    onClick={() => {
+                      const to = mailState.to.trim();
+                      if (desktopMail) {
+                        sendReceiptByMail(currentReceipt, to);
+                      } else if (!isValidEmail(to)) {
+                        setMailState({ state: "error", to, error: "Die E-Mail-Adresse ist ungültig." });
+                      } else {
+                        sendMail(to);
+                        setMailState({ state: "idle", to: "", error: "" });
+                      }
+                    }}
                     disabled={!mailState.to.trim()}
                     style={{ ...styles.primaryBtnSmall, opacity: mailState.to.trim() ? 1 : 0.4 }}
                   >
@@ -3109,13 +3240,14 @@ export default function ReceiptApp() {
                 <div style={currentReceipt.emailDelivery.status === "gesendet" ? styles.savedMsg : styles.hint}>
                   E-Mail {currentReceipt.emailDelivery.status} am {formatDateTimeDE(currentReceipt.emailDelivery.at)}
                   {currentReceipt.emailDelivery.error ? ` — ${currentReceipt.emailDelivery.error}` : ""}
+                  {currentReceipt.emailDelivery.beforeEdit ? " (frühere Fassung, vor der letzten Bearbeitung)" : ""}
                 </div>
               )}
             </div>
           )}
           {!desktopMail && !currentReceipt.customer.email && (
             <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 12px" }}>
-              Für diesen Kunden ist keine E-Mail-Adresse hinterlegt — bitte manuell versenden.
+              Für diesen Kunden ist keine E-Mail-Adresse hinterlegt — unter «Per E-Mail senden» lässt sie sich für diesen Versand eintragen.
             </div>
           )}
           {!currentReceipt.customer.phone && (

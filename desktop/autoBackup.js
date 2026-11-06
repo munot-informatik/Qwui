@@ -97,8 +97,16 @@ export function createAutoBackup({ buildPayload, getConfig, getPassword, readSta
       const tmp = `${target}.tmp`;
       writeFileSync(tmp, encryptBackup(JSON.stringify(payload), password));
       renameSync(tmp, target);
-      rotate(config.dir, kind);
-      return record(kind, { at: at.toISOString(), ok: true, file, error: null });
+      // Die Sicherung ist geschrieben. Eine gesperrte alte Datei beim Aufräumen
+      // (Cloud-Client) darf sie nicht als gescheitert gelten lassen — sonst
+      // entstünde alle paar Minuten eine weitere Datei.
+      let rotateWarning = null;
+      try {
+        rotate(config.dir, kind);
+      } catch (e) {
+        rotateWarning = `Alte Sicherungen konnten nicht aufgeräumt werden: ${e.message || e}`;
+      }
+      return record(kind, { at: at.toISOString(), ok: true, file, error: null, rotateWarning });
     } catch (e) {
       return record(kind, { at: at.toISOString(), ok: false, error: e.message || String(e) });
     }

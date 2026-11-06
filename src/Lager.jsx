@@ -59,11 +59,15 @@ export function StockCell({ product, units, onCommit }) {
     // Ein leeres Feld ist keine Zählung: Number("") wäre 0 und würde den
     // ganzen Bestand per Inventurkorrektur ausbuchen. Wer 0 meint, tippt 0.
     const next = String(value).trim() === "" ? NaN : Number(value);
-    if (!Number.isFinite(next)) {
+    if (!Number.isInteger(next)) {
       setValue(String(product.stock ?? 0));
       return;
     }
-    if (next !== (Number(product.stock) || 0)) onCommit(next);
+    if (next === (Number(product.stock) || 0)) return;
+    // Nicht gespeichert: wieder den gültigen Bestand anzeigen.
+    Promise.resolve(onCommit(next)).then((ok) => {
+      if (ok === false) setValue(String(product.stock ?? 0));
+    });
   }
 
   return (
@@ -199,6 +203,7 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
 
   function selectProduct(p) {
     setProductId(p ? p.id : "");
+    setPurchasePrice("");
     setSerials([]);
     setSerialMessage(null);
     setErrors([]);
@@ -256,6 +261,7 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
     setSaved(`${count} × ${product.name} eingebucht.`);
     setSerials([]);
     setQuantity("");
+    setPurchasePrice("");
     setNote("");
     setSerialMessage(null);
     focusEntry(product);

@@ -178,7 +178,13 @@ export function Schnittstelle() {
 
   async function save() {
     setMessage(null);
-    const result = await api.saveConfig({ enabled, port: Number(port) });
+    let result;
+    try {
+      result = await api.saveConfig({ enabled, port: Number(port) });
+    } catch (e) {
+      setMessage({ kind: "error", text: e.message || String(e) });
+      return;
+    }
     if (result.config) apply(result);
     setMessage(result.ok ? { kind: "ok", text: result.running ? "Schnittstelle läuft." : "Schnittstelle ist aus." } : { kind: "error", text: result.error });
   }
@@ -234,7 +240,13 @@ export function Schnittstelle() {
               </button>
               <button
                 type="button"
-                onClick={async () => apply(await api.regenerateToken())}
+                onClick={async () => {
+                  try {
+                    apply(await api.regenerateToken());
+                  } catch (e) {
+                    setMessage({ kind: "error", text: e.message || String(e) });
+                  }
+                }}
                 style={s.secondaryBtn}
                 title="Das alte Token gilt danach nicht mehr"
               >

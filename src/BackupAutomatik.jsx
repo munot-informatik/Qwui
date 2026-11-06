@@ -52,7 +52,12 @@ export default function BackupAutomatik() {
       return;
     }
     setBusy(true);
-    const result = await api.saveConfig({ enabled, dir }, password || null);
+    let result;
+    try {
+      result = await api.saveConfig({ enabled, dir }, password || null);
+    } catch (e) {
+      result = { ok: false, error: e.message || String(e) };
+    }
     setBusy(false);
     if (!result.ok) {
       setMessage({ kind: "error", text: result.error });
@@ -67,7 +72,14 @@ export default function BackupAutomatik() {
   async function runNow() {
     setBusy(true);
     setMessage(null);
-    const next = await api.runNow();
+    let next;
+    try {
+      next = await api.runNow();
+    } catch (e) {
+      setBusy(false);
+      setMessage({ kind: "error", text: e.message || String(e) });
+      return;
+    }
     setBusy(false);
     setState(next);
     const last = next.status?.stuendlich;
@@ -137,6 +149,7 @@ export default function BackupAutomatik() {
                 <span style={{ width: 80, fontWeight: 600 }}>{KIND_LABEL[kind]}</span>
                 <span style={{ flex: 1 }}>
                   {st?.lastSuccessAt ? `zuletzt ${formatDateTimeDE(st.lastSuccessAt)}` : "noch keine Sicherung"}
+                  {st?.ok && st.rotateWarning && <div style={{ color: "#B5480C" }}>{st.rotateWarning}</div>}
                   {st && !st.ok && st.error && (
                     <div style={{ color: "#B5480C" }}>
                       Fehler am {formatDateTimeDE(st.at)}: {st.error}

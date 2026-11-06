@@ -110,18 +110,24 @@ export async function restoreLogos(receipts, readRaw) {
         const dataUrl = await readRaw(ref);
         // Fehlt das Logo (z.B. Datenbank von Hand aufgeräumt), lieber ohne
         // Logo weitermachen als die ganze Liste scheitern zu lassen.
-        logoCache.set(ref, dataUrl || "");
-        if (dataUrl) knownStored.add(ref);
+        if (dataUrl) {
+          logoCache.set(ref, dataUrl);
+          knownStored.add(ref);
+        }
       } catch (e) {
+        // Nicht im Cache merken: beim nächsten Laden erneut versuchen.
         console.warn(`Logo ${ref} konnte nicht geladen werden`, e);
-        logoCache.set(ref, "");
       }
     })
   );
 
   return receipts.map((receipt) => {
     if (!hasLogoRef(receipt)) return receipt;
-    const company = { ...receipt.company, logoDataUrl: logoCache.get(receipt.company.logoRef) || "" };
+    const dataUrl = logoCache.get(receipt.company.logoRef);
+    // Nicht geladen: Referenz behalten. Ohne sie würde das nächste Speichern
+    // der Liste das Logo dieser Quittung endgültig entfernen.
+    if (!dataUrl) return { ...receipt, company: { ...receipt.company, logoDataUrl: "" } };
+    const company = { ...receipt.company, logoDataUrl: dataUrl };
     delete company.logoRef;
     return { ...receipt, company };
   });
