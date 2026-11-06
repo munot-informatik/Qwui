@@ -537,6 +537,14 @@ den Code und drückt Enter.
 3. Optional Einkaufspreis und Bemerkung (z. B. Lieferschein), dann
    **Wareneingang buchen**.
 
+**Seriennummern aus Fotos (Windows):** Ist die Nummer nur als Text auf dem
+Etikett, im Wareneingang **Seriennummern aus Fotos lesen** wählen. Qwui liest die
+Fotos mit der in Windows eingebauten Texterkennung auf diesem PC, ohne Internet.
+Jede erkannte Nummer erscheint neben ihrem Foto und kommt erst nach **Stimmt,
+übernehmen** in die Liste. Bitte jede Nummer vergleichen: Die Erkennung verwechselt
+ähnliche Zeichen wie `0` und `O` oder `1` und `I`. Gut lesbar sind scharfe,
+gerade aufgenommene Fotos mit genügend Licht.
+
 **Verkauf:** In der Quittung bei der Position **Produkt** den Artikel wählen.
 Bei Seriennummernpflicht muss ein Exemplar gewählt werden, sonst wird die
 Quittung nicht erstellt; die Seriennummer steht danach als «S/N: …» auf dem

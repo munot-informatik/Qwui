@@ -8,9 +8,9 @@
 // werden sie einmalig übernommen (migrateExcel.js); die Excel-Datei bleibt
 // unverändert als Sicherung liegen.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell } from "electron";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { randomUUID, randomBytes } from "node:crypto";
 import { getDataDir, getWorkbookPath, getCompanyPath, getDatabasePath, getSecretsPath } from "./dataDir.js";
@@ -31,6 +31,8 @@ import { runAssistantTool, TOOL_NAMES } from "./shared/assistantTools.js";
 import { DRAFT_STATUS } from "./shared/drafts.js";
 import { createLocalApi, API_TOKEN_SECRET, DEFAULT_API_PORT } from "./localApi.js";
 import { writeEvaluation } from "./excelExport.js";
+import { recognizeText } from "./ocr.js";
+import { extractSerialCandidates } from "./shared/serialOcr.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -589,6 +591,43 @@ if (!gotLock) {
     shell.showItemInFolder(result.filePath);
     return { ok: true, path: result.filePath };
   }
+
+  // ---- Seriennummern aus Fotos ----
+  // Die Fotos bleiben auf diesem PC. Zurück an die Seite gehen nur der erkannte
+  // Text und eine verkleinerte Vorschau zum Vergleichen.
+
+  const OCR_MAX_PHOTOS = 30;
+
+  function photoPreview(path) {
+    const image = nativeImage.createFromPath(path);
+    if (image.isEmpty()) return null;
+    const { width } = image.getSize();
+    return (width > 1400 ? image.resize({ width: 1400 }) : image).toJPEG(85).toString("base64");
+  }
+
+  ipcMain.handle("ocr:readPhotos", async () => {
+    const chosen = await dialog.showOpenDialog(mainWindow, {
+      title: "Fotos der Seriennummern wählen",
+      properties: ["openFile", "multiSelections"],
+      filters: [{ name: "Bilder", extensions: ["jpg", "jpeg", "png", "bmp", "tif", "tiff", "heic"] }],
+    });
+    if (chosen.canceled) return { photos: [] };
+    const paths = chosen.filePaths.slice(0, OCR_MAX_PHOTOS);
+    const photos = [];
+    for (const path of paths) {
+      const photo = { fileName: basename(path), preview: null, lines: [], candidates: [], error: null };
+      try {
+        const jpeg = photoPreview(path);
+        if (jpeg) photo.preview = `data:image/jpeg;base64,${jpeg}`;
+        photo.lines = await recognizeText(path);
+        photo.candidates = extractSerialCandidates(photo.lines);
+      } catch (e) {
+        photo.error = e.message || String(e);
+      }
+      photos.push(photo);
+    }
+    return { photos, skipped: chosen.filePaths.length - paths.length };
+  });
 
   ipcMain.handle("export:evaluation", async () => {
     try {

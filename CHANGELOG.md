@@ -3,6 +3,16 @@
 Alle nennenswerten Änderungen an Qwui. Versionsnummern folgen der Web- und
 Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
 
+## Unveröffentlicht
+
+### Seriennummern aus Fotos (Windows)
+
+- Im Wareneingang lassen sich Seriennummern aus Fotos lesen, wenn sie nicht als
+  Barcode vorliegen. Die Erkennung läuft mit der in Windows eingebauten
+  Texterkennung auf dem PC, ohne Internet.
+- Die Erkennung macht nur Vorschläge: Jede Nummer wird neben dem Foto angezeigt,
+  lässt sich korrigieren und kommt erst nach «Stimmt, übernehmen» in die Liste.
+
 ## 1.2.0 — 3. November 2026
 
 Qwui wird zur einzigen Datenbasis eines Fachgeschäfts: Lager mit

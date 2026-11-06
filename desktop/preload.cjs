@@ -50,6 +50,11 @@ contextBridge.exposeInMainWorld("qwuiDesktop", {
     chooseDir: () => ipcRenderer.invoke("shop:chooseDir"),
     syncNow: () => ipcRenderer.invoke("shop:syncNow"),
   },
+  ocr: {
+    // Öffnet die Dateiauswahl und liest die gewählten Fotos. Der Pfad bleibt im
+    // Hauptprozess, die Seite kann so keine beliebigen Dateien anfordern.
+    readPhotos: () => ipcRenderer.invoke("ocr:readPhotos"),
+  },
   assistant: {
     getState: () => ipcRenderer.invoke("api:getState"),
     saveConfig: (config) => ipcRenderer.invoke("api:saveConfig", config),

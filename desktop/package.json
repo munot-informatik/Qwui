@@ -45,6 +45,7 @@
       "shopSync.js",
       "localApi.js",
       "excelExport.js",
+      "ocr.js",
       "shared/**/*",
       "logoCache.js",
       "dist/**/*",

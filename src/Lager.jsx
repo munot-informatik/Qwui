@@ -6,9 +6,10 @@
 // Funktionen aus shared/stock.js, gespeichert in einem Schritt (setMany).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, X, Search } from "lucide-react";
+import { Plus, X, Search, Camera, Check } from "lucide-react";
 import { UNIT_STATUS_LABEL, normalizeSerial, findUnitBySerial } from "../shared/serials.js";
 import { MOVEMENT_TYPE_LABEL, isSerialTracked, productStock } from "../shared/stock.js";
+import { confusableChars } from "../shared/serialOcr.js";
 
 function chf(n) {
   const num = Number(n) || 0;
@@ -186,6 +187,9 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
   const [newArticle, setNewArticle] = useState(null);
+  const [photos, setPhotos] = useState([]);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState("");
   const serialRef = useRef(null);
   const quantityRef = useRef(null);
 
@@ -205,6 +209,8 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
     setProductId(p ? p.id : "");
     setPurchasePrice("");
     setSerials([]);
+    setPhotos([]);
+    setPhotoError("");
     setSerialMessage(null);
     setErrors([]);
     setSaved("");
@@ -225,20 +231,56 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
     }
   }
 
-  function addSerial() {
-    const raw = serialInput.trim();
-    if (!raw) return;
+  // Gemeinsam für Scanner und Foto. Liefert true, wenn die Nummer übernommen wurde.
+  function addSerialValue(raw) {
     const wanted = normalizeSerial(raw);
     if (serials.some((x) => normalizeSerial(x) === wanted)) {
       setSerialMessage({ kind: "error", text: `${raw} ist bereits gescannt.` });
-    } else if (findUnitBySerial(units, raw)) {
-      setSerialMessage({ kind: "error", text: `${raw} ist bereits im Lager erfasst.` });
-    } else {
-      setSerials((prev) => [...prev, raw]);
-      setSerialMessage({ kind: "ok", text: `${raw} übernommen.` });
+      return false;
     }
+    if (findUnitBySerial(units, raw)) {
+      setSerialMessage({ kind: "error", text: `${raw} ist bereits im Lager erfasst.` });
+      return false;
+    }
+    setSerials((prev) => [...prev, raw]);
+    setSerialMessage({ kind: "ok", text: `${raw} übernommen.` });
+    return true;
+  }
+
+  function addSerial() {
+    const raw = serialInput.trim();
+    if (!raw) return;
+    addSerialValue(raw);
     setSerialInput("");
     serialRef.current?.focus();
+  }
+
+  // Fotos: Die Erkennung macht nur Vorschläge. In die Liste kommt eine Nummer
+  // erst, wenn jemand sie mit dem Foto verglichen und bestätigt hat.
+  async function readPhotos() {
+    setPhotoBusy(true);
+    setPhotoError("");
+    try {
+      const { photos: read, skipped } = await window.qwuiDesktop.ocr.readPhotos();
+      setPhotos((prev) => [
+        ...prev,
+        ...read.map((p, i) => ({ ...p, id: `${Date.now()}-${i}`, value: p.candidates[0] || "" })),
+      ]);
+      if (skipped) setPhotoError(`${skipped} weitere Fotos wurden nicht gelesen — höchstens 30 auf einmal.`);
+    } catch (e) {
+      setPhotoError(e.message || String(e));
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
+  function setPhotoValue(id, value) {
+    setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, value } : p)));
+  }
+
+  function acceptPhoto(photo) {
+    const raw = photo.value.trim();
+    if (raw && addSerialValue(raw)) setPhotos((prev) => prev.filter((p) => p.id !== photo.id));
   }
 
   async function save() {
@@ -418,6 +460,70 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
                   aria-label="Seriennummer"
                 />
               </label>
+              {window.qwuiDesktop?.ocr && (
+                <div style={{ marginTop: 8 }}>
+                  <button type="button" onClick={readPhotos} disabled={photoBusy} style={{ ...s.secondaryBtn, opacity: photoBusy ? 0.5 : 1 }}>
+                    <Camera size={14} /> {photoBusy ? "Lese Fotos…" : "Seriennummern aus Fotos lesen"}
+                  </button>
+                  {photoError && <div style={s.hint}>{photoError}</div>}
+                </div>
+              )}
+              {photos.map((photo) => {
+                const similar = confusableChars(photo.value);
+                return (
+                  <div key={photo.id} style={s.photoCard}>
+                    {photo.preview && <img src={photo.preview} alt={`Foto ${photo.fileName}`} style={s.photoImage} />}
+                    <div style={s.muted}>{photo.fileName}</div>
+                    {photo.error ? (
+                      <div style={s.hint}>{photo.error}</div>
+                    ) : photo.candidates.length === 0 ? (
+                      <div style={s.hint}>Keine Seriennummer erkannt — bitte vom Foto abtippen.</div>
+                    ) : null}
+                    <div style={{ ...s.row, marginTop: 6 }}>
+                      <input
+                        value={photo.value}
+                        onChange={(e) => setPhotoValue(photo.id, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            acceptPhoto(photo);
+                          }
+                        }}
+                        placeholder="Seriennummer"
+                        className="mono"
+                        style={{ width: 280 }}
+                        aria-label={`Seriennummer aus ${photo.fileName}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => acceptPhoto(photo)}
+                        disabled={!photo.value.trim()}
+                        style={{ ...s.secondaryBtn, opacity: photo.value.trim() ? 1 : 0.4 }}
+                      >
+                        <Check size={14} /> Stimmt, übernehmen
+                      </button>
+                      <button type="button" style={s.linkBtn} onClick={() => setPhotos((prev) => prev.filter((p) => p.id !== photo.id))}>
+                        Verwerfen
+                      </button>
+                    </div>
+                    {photo.candidates.length > 1 && (
+                      <div style={s.chips}>
+                        <span style={s.muted}>Andere Vorschläge:</span>
+                        {photo.candidates.slice(0, 6).map((c) => (
+                          <button key={c} type="button" className="mono" style={s.chipBtn} onClick={() => setPhotoValue(photo.id, c)}>
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {similar.length > 0 && (
+                      <div style={{ ...s.muted, marginTop: 6 }}>
+                        Bitte Zeichen für Zeichen mit dem Foto vergleichen, besonders {similar.join(", ")}: Die Erkennung verwechselt sie leicht.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               {serialMessage && (
                 <div style={serialMessage.kind === "error" ? s.scanError : s.scanOk} role="status">
                   {serialMessage.text}
@@ -699,6 +805,9 @@ const s = {
   scanOk: { fontSize: 12, color: "#1D7A3C", marginTop: 6 },
   chips: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10, alignItems: "center" },
   chip: { display: "flex", alignItems: "center", gap: 4, border: "1px solid #DADDE1", padding: "3px 6px", fontSize: 12, background: "#F7F7F5" },
+  photoCard: { border: "1px solid #E4E5E7", padding: 12, marginTop: 10, background: "#F7F7F5" },
+  photoImage: { display: "block", maxWidth: "100%", maxHeight: 260, marginBottom: 6, border: "1px solid #DADDE1" },
+  chipBtn: { border: "1px solid #DADDE1", padding: "3px 6px", fontSize: 12, background: "#fff", cursor: "pointer" },
   chipRemove: { border: "none", background: "transparent", cursor: "pointer", padding: 0, display: "flex", color: "#70747C" },
   stockReadOnly: { display: "inline-block", textAlign: "right", padding: "8px 10px", fontSize: 13, color: "#5B5F66" },
   unitBox: { margin: "4px 0 10px 24px", borderLeft: "2px solid #EDEEEF", paddingLeft: 12 },
