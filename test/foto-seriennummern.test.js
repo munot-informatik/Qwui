@@ -22,6 +22,14 @@ describe("Vorschläge aus dem Fototext", () => {
     expect(extractSerialCandidates(["Modell X200", zeile])[0]).toBe("PR1001");
   });
 
+  it("hält Wörter wie «Snooker» nicht für eine Bezeichnung", () => {
+    const vorschlaege = extractSerialCandidates(["Snooker 147", "Serial: AB1234"]);
+    expect(vorschlaege[0]).toBe("AB1234");
+    expect(vorschlaege).not.toContain("ooker147");
+    // «SN» direkt vor Ziffern bleibt erkannt
+    expect(extractSerialCandidates(["SN123456"])).toContain("123456");
+  });
+
   it("findet die Nummer auf der Zeile nach der Bezeichnung", () => {
     expect(extractSerialCandidates(["Modell X200", "Serial Number", "AB12345"])[0]).toBe("AB12345");
   });

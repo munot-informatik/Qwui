@@ -8,7 +8,7 @@
 
 import React, { useEffect, useState } from "react";
 import { Printer } from "lucide-react";
-import { canEncode, code128Bars } from "../shared/code128.js";
+import { canEncode, code128Bars, fitsWidth } from "../shared/code128.js";
 
 export const LABEL_FORMATS = [
   { id: "roll62x29", label: "Etikettendrucker 62 × 29 mm", kind: "roll", width: 62, height: 29 },
@@ -42,6 +42,9 @@ export function Barcode({ value, maxWidthMm, heightMm }) {
   if (!canEncode(value)) {
     return <div style={l.noCode}>Kein Strichcode möglich (Sonderzeichen)</div>;
   }
+  if (!fitsWidth(value, maxWidthMm)) {
+    return <div style={l.noCode}>Nummer zu lang für einen lesbaren Strichcode in diesem Format</div>;
+  }
   const { bars, totalWidth } = code128Bars(value);
   const widthMm = Math.min(maxWidthMm, totalWidth * 0.4);
   return (
@@ -72,6 +75,12 @@ function Label({ item, format }) {
   );
 }
 
+function chunk(list, size) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
 // Der Bogen selbst: auf dem Bildschirm unsichtbar, nur beim Etikettendruck da.
 export function LabelSheet({ job }) {
   if (!job) return null;
@@ -79,13 +88,25 @@ export function LabelSheet({ job }) {
   return (
     <div className="label-sheet" data-format={format.id}>
       {format.kind === "sheet" ? (
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${format.columns}, ${format.width}mm)`, gridAutoRows: `${format.height}mm` }}>
-          {job.labels.map((item, i) => (
-            <div key={i} style={(i + 1) % (format.columns * format.rows) === 0 ? { breakAfter: "page" } : undefined}>
-              <Label item={item} format={format} />
-            </div>
-          ))}
-        </div>
+        // Je Bogen ein eigener Block mit fester Höhe: Der Seitenumbruch hängt so
+        // nicht davon ab, wie der Browser ein Raster auf Seiten verteilt.
+        chunk(job.labels, format.columns * format.rows).map((page, p, pages) => (
+          <div
+            key={p}
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(${format.columns}, ${format.width}mm)`,
+              gridAutoRows: `${format.height}mm`,
+              height: "296mm",
+              overflow: "hidden",
+              breakAfter: p < pages.length - 1 ? "page" : "auto",
+            }}
+          >
+            {page.map((item, i) => (
+              <Label key={i} item={item} format={format} />
+            ))}
+          </div>
+        ))
       ) : (
         job.labels.map((item, i) => (
           <div key={i} style={i < job.labels.length - 1 ? { breakAfter: "page" } : undefined}>
@@ -128,8 +149,13 @@ export function useLabelPrinter() {
       setJob(null);
     }
     window.addEventListener("afterprint", finish);
-    // Erst drucken, wenn der Bogen gezeichnet ist.
-    const timer = setTimeout(() => window.print(), 50);
+    // Erst drucken, wenn der Bogen gezeichnet ist. window.print() kehrt erst
+    // nach dem Druckdialog zurück; danach aufräumen, auch wenn «afterprint»
+    // ausbleibt — sonst druckte die nächste Quittung nur Etiketten.
+    const timer = setTimeout(() => {
+      window.print();
+      finish();
+    }, 50);
     return () => {
       clearTimeout(timer);
       cleanup();
@@ -184,7 +210,12 @@ export const LABEL_PRINT_CSS = `
   @media print {
     body.qwui-print-labels .receipt-app > :not(.label-sheet) { display: none !important; }
     body.qwui-print-labels .label-sheet { display: block !important; }
-    body.qwui-print-labels { margin: 0 !important; }
+    html:has(body.qwui-print-labels), body.qwui-print-labels, body.qwui-print-labels .receipt-app {
+      margin: 0 !important;
+      padding: 0 !important;
+      min-height: 0 !important;
+      background: #fff !important;
+    }
   }
 `;
 

@@ -4,7 +4,7 @@
 // hier stehen feste Beispiele, damit eine Änderung an der Tabelle auffällt.
 
 import { describe, it, expect } from "vitest";
-import { canEncode, code128Values, code128Widths, code128Binary, code128Bars, QUIET_ZONE } from "../shared/code128.js";
+import { canEncode, code128Values, code128Widths, code128Binary, code128Bars, fitsWidth, QUIET_ZONE } from "../shared/code128.js";
 
 describe("Code 128", () => {
   it("berechnet das Prüfzeichen (gewichtete Summe modulo 103)", () => {
@@ -43,5 +43,12 @@ describe("Code 128", () => {
     expect(canEncode("")).toBe(false);
     expect(canEncode("x".repeat(49))).toBe(false);
     expect(() => code128Values("Ä1")).toThrow(/nicht als Strichcode/);
+  });
+
+  it("meldet, wenn eine Nummer zu lang für einen lesbaren Strichcode ist", () => {
+    // Etikett 62 mm, davon 56 mm für den Strichcode
+    expect(fitsWidth("PR-1002-8B47", 56)).toBe(true);
+    expect(fitsWidth("X".repeat(30), 56)).toBe(false);
+    expect(fitsWidth("Ä1", 56)).toBe(false);
   });
 });

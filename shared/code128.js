@@ -68,6 +68,16 @@ export function code128Binary(text) {
     .join("");
 }
 
+// Schmalster Strich, den Etikettendrucker (203 dpi, 0,125 mm je Punkt) und
+// einfache Scanner noch zuverlässig wiedergeben bzw. lesen.
+export const MIN_MODULE_MM = 0.19;
+
+// Passt der Strichcode lesbar in diese Breite (Millimeter, inklusive Ruhezone)?
+export function fitsWidth(text, widthMm) {
+  if (!canEncode(text)) return false;
+  return widthMm / code128Bars(text).totalWidth >= MIN_MODULE_MM;
+}
+
 // Rechtecke für ein SVG: { x, width } in Modulen, dazu die Gesamtbreite
 // inklusive Ruhezone.
 export function code128Bars(text) {

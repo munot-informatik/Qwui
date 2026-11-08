@@ -6,7 +6,8 @@
 
 import { normalizeSerial } from "./serials.js";
 
-const LABEL_RE = /(?:^|[\s(])(?:s\s*\/\s*n|s\/no|sn|ser\.?\s*(?:no|nr)|serial(?:\s*(?:no|nr|number))?|serien\s*(?:nummer|nr)|seriennummer)\s*[.:#]*\s*(.*)$/i;
+// Nach der Bezeichnung darf kein Buchstabe folgen: «Snooker 147» ist keine «SN».
+const LABEL_RE = /(?:^|[\s(])(?:s\s*\/\s*n|s\/no|sn|ser\.?\s*(?:no|nr)|serial(?:\s*(?:no|nr|number))?|serien\s*(?:nummer|nr)|seriennummer)(?![a-z])\s*[.:#]*\s*(.*)$/i;
 const ALLOWED_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*[A-Za-z0-9]$/;
 
 function cleanToken(raw) {
