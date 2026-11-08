@@ -10,6 +10,7 @@ import { Plus, X, Search, Camera, Check } from "lucide-react";
 import { UNIT_STATUS_LABEL, normalizeSerial, findUnitBySerial } from "../shared/serials.js";
 import { MOVEMENT_TYPE_LABEL, isSerialTracked, productStock } from "../shared/stock.js";
 import { confusableChars } from "../shared/serialOcr.js";
+import { LabelPrintButton } from "./Etiketten.jsx";
 
 function chf(n) {
   const num = Number(n) || 0;
@@ -91,7 +92,7 @@ export function StockCell({ product, units, onCommit }) {
 
 // ---- Exemplare eines Artikels ----
 
-export function UnitList({ product, units, customerName, onStatus, onNote, onOpenReceipt }) {
+export function UnitList({ product, units, customerName, onStatus, onNote, onOpenReceipt, onPrintLabels }) {
   const list = units
     .filter((u) => u.productId === product.id)
     .sort((a, b) => (a.serial || "").localeCompare(b.serial || "", "de-CH"));
@@ -100,8 +101,19 @@ export function UnitList({ product, units, customerName, onStatus, onNote, onOpe
     return <div style={s.unitEmpty}>Noch keine Exemplare — Seriennummern über den Wareneingang erfassen.</div>;
   }
 
+  const inStock = list.filter((u) => u.status === "an_lager" || u.status === "reserviert");
+
   return (
     <div style={s.unitBox}>
+      {onPrintLabels && inStock.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <LabelPrintButton
+            text="Etiketten für alle an Lager drucken"
+            labels={inStock.map((u) => ({ serial: u.serial, productName: product.name }))}
+            onPrint={onPrintLabels}
+          />
+        </div>
+      )}
       <div style={s.unitHead}>
         <span style={{ width: 150, flexShrink: 0 }}>Seriennummer</span>
         <span style={{ width: 130, flexShrink: 0 }}>Status</span>
@@ -173,7 +185,7 @@ const emptyNewArticle = { articleNumber: "", name: "", group: "", price: "", ser
 // Ein Barcode-Scanner verhält sich wie eine Tastatur: er tippt den Code und
 // drückt Enter. Deshalb übernimmt jedes Feld hier seinen Wert mit Enter,
 // behält danach den Fokus und ist sofort für den nächsten Scan bereit.
-export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct }) {
+export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct, onPrintLabels }) {
   const [productId, setProductId] = useState("");
   const [articleScan, setArticleScan] = useState("");
   const [scanInfo, setScanInfo] = useState("");
@@ -185,6 +197,7 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
   const [note, setNote] = useState("");
   const [errors, setErrors] = useState([]);
   const [saved, setSaved] = useState("");
+  const [bookedLabels, setBookedLabels] = useState([]);
   const [busy, setBusy] = useState(false);
   const [newArticle, setNewArticle] = useState(null);
   const [photos, setPhotos] = useState([]);
@@ -301,6 +314,7 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
     }
     const count = serialTracked ? serials.length : Number(quantity);
     setSaved(`${count} × ${product.name} eingebucht.`);
+    setBookedLabels(serialTracked ? serials.map((serial) => ({ serial, productName: product.name })) : []);
     setSerials([]);
     setQuantity("");
     setPurchasePrice("");
@@ -603,14 +617,26 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
           )}
         </div>
       )}
-      {saved && <div style={{ ...s.saved, marginTop: 10 }}>{saved}</div>}
+      {saved && (
+        <div style={{ ...s.saved, marginTop: 10 }}>
+          {saved}
+          {onPrintLabels && bookedLabels.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <LabelPrintButton labels={bookedLabels} onPrint={onPrintLabels} />
+              <div style={{ ...s.muted, marginTop: 4 }}>
+                Für Stücke, auf denen die Seriennummer nur als Text steht: Etikett aufkleben, danach lässt sich das Stück scannen.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ---- Garantie-Suche nach Seriennummer ----
 
-export function SeriennummerSuche({ units, inventory, customerName, onOpenReceipt }) {
+export function SeriennummerSuche({ units, inventory, customerName, onOpenReceipt, onPrintLabels }) {
   const [query, setQuery] = useState("");
   const q = normalizeSerial(query);
   const hits = q ? units.filter((u) => normalizeSerial(u.serial).includes(q)).slice(0, 50) : [];
@@ -642,7 +668,16 @@ export function SeriennummerSuche({ units, inventory, customerName, onOpenReceip
                   {product?.articleNumber && <span className="mono" style={s.muted}> · {product.articleNumber}</span>}
                 </div>
               </div>
-              <span style={{ ...s.statusBadge, ...(STATUS_BADGE[u.status] || {}) }}>{UNIT_STATUS_LABEL[u.status] || u.status}</span>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+                <span style={{ ...s.statusBadge, ...(STATUS_BADGE[u.status] || {}) }}>{UNIT_STATUS_LABEL[u.status] || u.status}</span>
+                {onPrintLabels && (
+                  <LabelPrintButton
+                    text="Etikett drucken"
+                    labels={[{ serial: u.serial, productName: product ? product.name : "" }]}
+                    onPrint={onPrintLabels}
+                  />
+                )}
+              </div>
             </div>
             <div style={s.hitGrid}>
               <span style={s.muted}>Eingang</span>

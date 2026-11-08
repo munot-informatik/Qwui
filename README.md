@@ -545,6 +545,17 @@ Jede erkannte Nummer erscheint neben ihrem Foto und kommt erst nach **Stimmt,
 ähnliche Zeichen wie `0` und `O` oder `1` und `I`. Gut lesbar sind scharfe,
 gerade aufgenommene Fotos mit genügend Licht.
 
+**Etiketten mit Strichcode:** Für Stücke, auf denen die Seriennummer nur als Text
+steht. Nach dem Buchen im Wareneingang erscheint **Etiketten drucken**, dazu gibt
+es **Etikett drucken** in der Seriennummer-Suche und **Etiketten für alle an Lager
+drucken** in der Exemplar-Liste eines Artikels. Der Strichcode ist ein Code 128,
+den auch einfache Scanner lesen. Formate: Etikettendrucker 62 × 29 mm oder
+57 × 32 mm (ein Etikett pro Seite) und A4-Bogen 3 × 8 (70 × 37 mm). Im
+Druckdialog die Grösse 100 % wählen, beim Etikettendrucker das passende
+Etikettenformat im Druckertreiber. Seriennummern mit Umlauten oder anderen
+Sonderzeichen lassen sich nicht als Strichcode drucken; das Etikett zeigt dann
+nur den Hinweis.
+
 **Verkauf:** In der Quittung bei der Position **Produkt** den Artikel wählen.
 Bei Seriennummernpflicht muss ein Exemplar gewählt werden, sonst wird die
 Quittung nicht erstellt; die Seriennummer steht danach als «S/N: …» auf dem

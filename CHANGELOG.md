@@ -13,6 +13,13 @@ Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
 - Die Erkennung macht nur Vorschläge: Jede Nummer wird neben dem Foto angezeigt,
   lässt sich korrigieren und kommt erst nach «Stimmt, übernehmen» in die Liste.
 
+### Etiketten mit Strichcode
+
+- Seriennummer-Etiketten mit Code-128-Strichcode drucken: nach dem Wareneingang,
+  aus der Seriennummer-Suche und für alle Exemplare an Lager eines Artikels.
+- Formate für Etikettendrucker (62 × 29 mm, 57 × 32 mm) und A4-Bogen 3 × 8.
+  Das gewählte Format merkt sich Qwui auf diesem Gerät.
+
 ## 1.2.0 — 3. November 2026
 
 Qwui wird zur einzigen Datenbasis eines Fachgeschäfts: Lager mit

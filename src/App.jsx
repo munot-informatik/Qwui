@@ -49,6 +49,7 @@ import { buildBackupPayload, looksLikeBackup, isEncryptedBackup } from "../share
 import BackupAutomatik from "./BackupAutomatik.jsx";
 import ShopAnbindung from "./ShopAnbindung.jsx";
 import { Vorschlaege, Schnittstelle } from "./Assistent.jsx";
+import { LabelSheet, useLabelPrinter, LABEL_PRINT_CSS } from "./Etiketten.jsx";
 import { findArticle } from "../shared/reports.js";
 
 // Direkter Versand per SMTP und automatische Sicherung gibt es nur in der
@@ -295,6 +296,7 @@ export default function ReceiptApp() {
   // gerade in echtem Excel geöffnet) — bei D1 kam das kaum vor, war deshalb
   // bisher nur ein stiller console.error.
   const [persistError, setPersistError] = useState("");
+  const [labelJob, printLabels] = useLabelPrinter();
 
   const [company, setCompany] = useState(emptyCompany);
   const [companyDraft, setCompanyDraft] = useState(emptyCompany);
@@ -1816,7 +1818,9 @@ export default function ReceiptApp() {
           .preview-wrap { padding: 0 !important; }
           @page { size: A4; margin: 0; }
         }
+        ${LABEL_PRINT_CSS}
       `}</style>
+      <LabelSheet job={labelJob} />
 
       {persistError && (
         <div className="no-print" style={styles.persistErrorBanner}>
@@ -2434,6 +2438,7 @@ export default function ReceiptApp() {
                       groups={inventoryGroups.filter((g) => g !== UNGROUPED_LABEL)}
                       onBook={bookGoodsIn}
                       onCreateProduct={addProduct}
+                      onPrintLabels={printLabels}
                     />
                   </div>
                 )}
@@ -2445,6 +2450,7 @@ export default function ReceiptApp() {
                       inventory={inventory}
                       customerName={unitCustomerName}
                       onOpenReceipt={openReceiptById}
+                      onPrintLabels={printLabels}
                     />
                   </div>
                 )}
@@ -2703,6 +2709,7 @@ export default function ReceiptApp() {
                             onStatus={changeStatusOfUnit}
                             onNote={updateUnitNote}
                             onOpenReceipt={openReceiptById}
+                            onPrintLabels={printLabels}
                           />
                         )}
                         </React.Fragment>
