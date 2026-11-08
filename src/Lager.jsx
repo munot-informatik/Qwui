@@ -323,8 +323,16 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
     focusEntry(product);
   }
 
+  const [createError, setCreateError] = useState("");
+
   async function createArticle() {
     if (!newArticle?.name.trim()) return;
+    const number = newArticle.articleNumber.trim().toLowerCase();
+    if (number && inventory.some((p) => String(p.articleNumber || "").trim().toLowerCase() === number)) {
+      setCreateError(`Artikelnummer ${newArticle.articleNumber.trim()} gibt es schon im Inventar.`);
+      return;
+    }
+    setCreateError("");
     const entry = await onCreateProduct(newArticle);
     if (entry) {
       setNewArticle(null);
@@ -382,68 +390,18 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
       {scanInfo && <div style={s.hint}>{scanInfo}</div>}
 
       {newArticle && (
-        <div style={s.newArticleBox}>
-          <div style={s.label}>Neuen Artikel anlegen</div>
-          <div style={s.row}>
-            <input
-              placeholder="Artikelnummer"
-              value={newArticle.articleNumber}
-              onChange={(e) => setNewArticle({ ...newArticle, articleNumber: e.target.value })}
-              className="mono"
-              style={{ width: 140, flexShrink: 0 }}
-            />
-            <input
-              placeholder="Artikel-Name"
-              value={newArticle.name}
-              onChange={(e) => setNewArticle({ ...newArticle, name: e.target.value })}
-              style={{ flex: 1, minWidth: 160 }}
-              autoFocus
-            />
-            <input
-              placeholder="Produktgruppe"
-              list="wareneingang-gruppen"
-              value={newArticle.group}
-              onChange={(e) => setNewArticle({ ...newArticle, group: e.target.value })}
-              style={{ width: 150, flexShrink: 0 }}
-            />
-            <datalist id="wareneingang-gruppen">
-              {groups.map((g) => (
-                <option key={g} value={g} />
-              ))}
-            </datalist>
-            <input
-              placeholder="Preis CHF"
-              type="number"
-              min="0"
-              step="0.01"
-              value={newArticle.price}
-              onChange={(e) => setNewArticle({ ...newArticle, price: e.target.value })}
-              className="mono"
-              style={{ width: 100, flexShrink: 0, textAlign: "right" }}
-            />
-            <label style={s.checkLabel}>
-              <input
-                type="checkbox"
-                checked={newArticle.serialTracked}
-                onChange={(e) => setNewArticle({ ...newArticle, serialTracked: e.target.checked })}
-              />
-              Seriennummernpflichtig
-            </label>
-          </div>
-          <div style={{ ...s.row, marginTop: 8 }}>
-            <button
-              type="button"
-              onClick={createArticle}
-              disabled={!newArticle.name.trim()}
-              style={{ ...s.secondaryBtn, opacity: newArticle.name.trim() ? 1 : 0.4 }}
-            >
-              <Plus size={14} /> Anlegen und auswählen
-            </button>
-            <button type="button" style={s.linkBtn} onClick={() => setNewArticle(null)}>
-              Abbrechen
-            </button>
-          </div>
-        </div>
+        <ArticleForm
+          value={newArticle}
+          onChange={setNewArticle}
+          groups={groups}
+          submitLabel="Anlegen und auswählen"
+          onSubmit={createArticle}
+          onCancel={() => {
+            setNewArticle(null);
+            setCreateError("");
+          }}
+          error={createError}
+        />
       )}
 
       {product && (
@@ -630,6 +588,71 @@ export function Wareneingang({ inventory, units, groups, onBook, onCreateProduct
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Neuer Artikel (Wareneingang und Inventar) ----
+// value: { articleNumber, name, group, price, serialTracked, stock? }.
+// showStock: Anfangsbestand erfassen (nur im Inventar; im Wareneingang kommt
+// der Bestand aus der Buchung).
+export function ArticleForm({ value, onChange, groups = [], showStock = false, submitLabel, onSubmit, onCancel, error }) {
+  const set = (field) => (e) => onChange({ ...value, [field]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  const ready = !!String(value.name || "").trim();
+  return (
+    <div style={s.newArticleBox}>
+      <div style={s.label}>Neuen Artikel anlegen</div>
+      <div style={s.row}>
+        <input placeholder="Artikelnummer" value={value.articleNumber} onChange={set("articleNumber")} className="mono" style={{ width: 140, flexShrink: 0 }} />
+        <input placeholder="Artikel-Name" value={value.name} onChange={set("name")} style={{ flex: 1, minWidth: 160 }} autoFocus />
+        <input placeholder="Produktgruppe" list="artikel-gruppen" value={value.group} onChange={set("group")} style={{ width: 150, flexShrink: 0 }} />
+        <datalist id="artikel-gruppen">
+          {groups.map((g) => (
+            <option key={g} value={g} />
+          ))}
+        </datalist>
+        <input
+          placeholder="Preis CHF"
+          type="number"
+          min="0"
+          step="0.01"
+          value={value.price}
+          onChange={set("price")}
+          className="mono"
+          style={{ width: 100, flexShrink: 0, textAlign: "right" }}
+        />
+        {showStock && !value.serialTracked && (
+          <input
+            placeholder="Stück"
+            type="number"
+            min="0"
+            step="1"
+            value={value.stock}
+            onChange={set("stock")}
+            className="mono"
+            style={{ width: 80, flexShrink: 0, textAlign: "right" }}
+            aria-label="Anfangsbestand"
+          />
+        )}
+        <label style={s.checkLabel} title="Einzelstücke mit eigener Seriennummer, z. B. hochpreisige Queues">
+          <input type="checkbox" checked={!!value.serialTracked} onChange={set("serialTracked")} />
+          Seriennummernpflichtig
+        </label>
+      </div>
+      {value.serialTracked && (
+        <div style={{ ...s.muted, marginTop: 6 }}>Der Bestand ergibt sich aus den Exemplaren — Seriennummern im Wareneingang scannen.</div>
+      )}
+      <div style={{ ...s.row, marginTop: 8 }}>
+        <button type="button" onClick={onSubmit} disabled={!ready} style={{ ...s.secondaryBtn, opacity: ready ? 1 : 0.4 }}>
+          <Plus size={14} /> {submitLabel}
+        </button>
+        {onCancel && (
+          <button type="button" style={s.linkBtn} onClick={onCancel}>
+            Abbrechen
+          </button>
+        )}
+      </div>
+      {error && <div style={s.hint}>{error}</div>}
     </div>
   );
 }

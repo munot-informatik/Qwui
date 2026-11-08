@@ -6,7 +6,7 @@
 // - Protokoll: jeder Zugriff des Assistenten mit Zeit, Werkzeug und Ergebnis.
 
 import React, { useEffect, useState } from "react";
-import { Check, Copy, RefreshCw, X } from "lucide-react";
+import { Check, Copy, RefreshCw, X, Bot, Download } from "lucide-react";
 
 function formatDateTimeDE(iso) {
   const d = new Date(iso);
@@ -255,15 +255,48 @@ export function Schnittstelle() {
             </div>
             <div style={s.muted}>Wer das Token kennt, kann über diesen PC die Daten abfragen — wie ein Passwort behandeln.</div>
 
-            <div style={{ ...s.label, marginTop: 12 }}>Eintrag für Claude Desktop</div>
+            <div style={{ ...s.label, marginTop: 16 }}>Claude Desktop verbinden</div>
             <div style={s.muted}>
-              In Claude Desktop unter Einstellungen → Entwickler → «Konfiguration bearbeiten» einfügen und den Pfad zu
-              mcp\server.js anpassen. Voraussetzung: Node.js (LTS) ist installiert. Danach Claude Desktop neu starten.
+              Ein Klick öffnet Claude Desktop mit der Qwui-Erweiterung. Dort «Installieren» bestätigen — Adresse und
+              Token sind schon eingetragen. Node.js ist nicht nötig, Claude Desktop bringt alles mit. Nach «Erneuern»
+              des Tokens oder einem anderen Port die Erweiterung neu installieren.
             </div>
-            <pre style={s.pre}>{claudeConfig(state.config.port, state.token)}</pre>
-            <button type="button" onClick={() => copy(claudeConfig(state.config.port, state.token), "config")} style={s.secondaryBtn}>
-              <Copy size={14} /> {copied === "config" ? "Kopiert" : "Eintrag kopieren"}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  setMessage(null);
+                  const r = await api.installClaude();
+                  setMessage(r.ok ? { kind: "ok", text: "Claude Desktop sollte jetzt die Installation anzeigen." } : { kind: "error", text: r.error });
+                }}
+                style={s.primaryBtn}
+              >
+                <Bot size={14} /> In Claude Desktop installieren
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setMessage(null);
+                  const r = await api.saveClaudeExtension();
+                  if (r.ok) setMessage({ kind: "ok", text: `Gespeichert: ${r.path}. In Claude Desktop per Doppelklick oder unter Einstellungen → Erweiterungen installieren.` });
+                  else if (!r.canceled) setMessage({ kind: "error", text: r.error });
+                }}
+                style={s.secondaryBtn}
+              >
+                <Download size={14} /> Datei speichern
+              </button>
+            </div>
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ ...s.muted, cursor: "pointer" }}>Manuell einrichten (für Fortgeschrittene, braucht Node.js)</summary>
+              <div style={{ ...s.muted, marginTop: 6 }}>
+                In Claude Desktop unter Einstellungen → Entwickler → «Konfiguration bearbeiten» einfügen und den Pfad zu
+                mcp\server.js anpassen. Danach Claude Desktop neu starten.
+              </div>
+              <pre style={s.pre}>{claudeConfig(state.config.port, state.token)}</pre>
+              <button type="button" onClick={() => copy(claudeConfig(state.config.port, state.token), "config")} style={s.secondaryBtn}>
+                <Copy size={14} /> {copied === "config" ? "Kopiert" : "Eintrag kopieren"}
+              </button>
+            </details>
           </>
         )}
       </div>

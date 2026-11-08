@@ -1,6 +1,11 @@
+// Belege: alle Quittungen und Rechnungen an einem Ort (bis 1.2 getrennt in
+// «Verlauf» und «Buchhaltung»). Zeitraum wählen oder über alle Zeiträume
+// suchen, öffnen, bearbeiten, löschen, Zahlungen verbuchen, Mahnung, Excel.
+
 import React, { useMemo, useState } from "react";
-import { Download, Check, Loader2, AlertTriangle, Bell } from "lucide-react";
+import { Download, Check, Loader2, AlertTriangle, Bell, Search, X, Trash2 } from "lucide-react";
 import { buildMahnungPdfBytes } from "./receiptPdf.js";
+import { filterReceipts } from "../shared/search.js";
 
 function chf(n) {
   const num = Number(n) || 0;
@@ -59,12 +64,15 @@ function daysOverdue(receipt) {
   return daysSince(receipt.date) - paymentTermOf(receipt);
 }
 
-export default function BuchhaltungTab({ receipts, onTogglePaid }) {
+export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit, onDelete }) {
   const now = new Date();
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth()); // 0-11, or "all"
   const [exporting, setExporting] = useState(false);
   const [mahnungId, setMahnungId] = useState(null);
+  const [query, setQuery] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const searching = !!query.trim();
 
   const availableYears = useMemo(() => {
     const years = new Set([now.getFullYear()]);
@@ -75,16 +83,10 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
     return Array.from(years).sort((a, b) => b - a);
   }, [receipts]);
 
-  const filtered = useMemo(() => {
-    return receipts
-      .filter((r) => {
-        const [y, m] = (r.date || "").split("-");
-        if (Number(y) !== selectedYear) return false;
-        if (selectedMonth !== "all" && Number(m) - 1 !== selectedMonth) return false;
-        return true;
-      })
-      .sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [receipts, selectedYear, selectedMonth]);
+  const filtered = useMemo(
+    () => filterReceipts(receipts, { year: selectedYear, month: selectedMonth, query }),
+    [receipts, selectedYear, selectedMonth, query]
+  );
 
   const total = filtered.reduce((sum, r) => sum + (Number(r.total) || 0), 0);
   const totalOpen = filtered
@@ -94,6 +96,7 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
   const overdueCount = filtered.filter(isOverdue).length;
 
   function periodLabel() {
+    if (searching) return `Suche «${query.trim()}»`;
     if (selectedMonth === "all") return `Jahr ${selectedYear}`;
     return `${MONTH_NAMES[selectedMonth]} ${selectedYear}`;
   }
@@ -120,9 +123,11 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
       const worksheet = XLSX.utils.json_to_sheet(rows);
       worksheet["!cols"] = [{ wch: 8 }, { wch: 12 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 18 }];
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Buchhaltung");
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Belege");
 
-      const filename = `Buchhaltung_${selectedMonth === "all" ? "Jahr" : MONTH_NAMES[selectedMonth]}_${selectedYear}.xlsx`;
+      const filename = searching
+        ? "Belege_Suche.xlsx"
+        : `Belege_${selectedMonth === "all" ? "Jahr" : MONTH_NAMES[selectedMonth]}_${selectedYear}.xlsx`;
       XLSX.writeFile(workbook, filename);
     } catch (e) {
       // Vorher nur console.error: der Knopf sprang einfach zurück, ohne Datei
@@ -157,11 +162,27 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
 
   return (
     <div>
-      <div style={styles.eyebrow}>06 — Buchhaltung</div>
-      <h1 style={styles.h1}>Buchhaltung</h1>
+      <h1 style={styles.h1}>Belege</h1>
+
+      <div style={styles.searchRow}>
+        <Search size={15} color="#8B8F96" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Suchen: Nummer, Kunde, Artikel oder Seriennummer"
+          style={{ flex: 1, border: "none", outline: "none", padding: "8px 0", background: "transparent" }}
+          aria-label="Belege durchsuchen"
+        />
+        {query && (
+          <button type="button" style={styles.iconBtn} onClick={() => setQuery("")} aria-label="Suche leeren">
+            <X size={14} />
+          </button>
+        )}
+      </div>
 
       <div style={styles.filterRow}>
         <select
+          disabled={searching}
           value={selectedMonth}
           onChange={(e) => setSelectedMonth(e.target.value === "all" ? "all" : Number(e.target.value))}
           style={styles.select}
@@ -174,6 +195,7 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
         <select
           value={selectedYear}
           onChange={(e) => setSelectedYear(Number(e.target.value))}
+          disabled={searching}
           style={styles.select}
         >
           {availableYears.map((y) => (
@@ -202,7 +224,9 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
       )}
 
       {filtered.length === 0 ? (
-        <div style={styles.empty}>Keine Einträge für {periodLabel()}.</div>
+        <div style={styles.empty}>
+          {receipts.length === 0 ? "Noch keine Quittungen erstellt." : searching ? "Kein Beleg gefunden." : `Keine Belege für ${periodLabel()}.`}
+        </div>
       ) : (
         <div style={styles.table}>
           {filtered.map((r) => {
@@ -227,6 +251,8 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
                     <div style={styles.muted}>
                       {formatDateDE(r.date)}
                       {r.vatEnabled ? " · inkl. MWST" : ""}
+                      {r.editedAt ? " · bearbeitet" : ""}
+                      {r.emailDelivery ? ` · E-Mail ${r.emailDelivery.status}${r.emailDelivery.beforeEdit ? " (frühere Fassung)" : ""}` : ""}
                     </div>
                     {overdue && (
                       <div style={styles.overdueTag}>
@@ -242,7 +268,38 @@ export default function BuchhaltungTab({ receipts, onTogglePaid }) {
                     </div>
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {onOpen && (
+                    <button onClick={() => onOpen(r)} style={styles.actionBtn}>
+                      Öffnen
+                    </button>
+                  )}
+                  {onEdit && (
+                    <button onClick={() => onEdit(r)} style={styles.actionBtn}>
+                      Bearbeiten
+                    </button>
+                  )}
+                  {onDelete &&
+                    (confirmDelete === r.id ? (
+                      <>
+                        <button
+                          onClick={() => {
+                            setConfirmDelete(null);
+                            onDelete(r.id);
+                          }}
+                          style={styles.dangerBtn}
+                        >
+                          Ja, löschen
+                        </button>
+                        <button onClick={() => setConfirmDelete(null)} style={styles.actionBtn}>
+                          Nein
+                        </button>
+                      </>
+                    ) : (
+                      <button onClick={() => setConfirmDelete(r.id)} style={styles.actionBtn} aria-label={`Quittung ${r.number} löschen`}>
+                        <Trash2 size={12} /> Löschen
+                      </button>
+                    ))}
                   {status === "offen" && (
                     <button onClick={() => onTogglePaid(r.id, true)} style={styles.markPaidBtn}>
                       <Check size={13} /> Als bezahlt markieren
@@ -305,6 +362,22 @@ const styles = {
   },
   h1: { fontSize: 22, fontWeight: 700, margin: "0 0 20px 0" },
   filterRow: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
+  searchRow: { display: "flex", alignItems: "center", gap: 8, border: "1px solid #DADDE1", background: "#fff", padding: "0 10px", marginBottom: 10 },
+  iconBtn: { border: "none", background: "transparent", cursor: "pointer", padding: 6, display: "flex" },
+  actionBtn: {
+    marginTop: 8,
+    background: "#fff",
+    border: "1px solid #DADDE1",
+    color: "#16181D",
+    fontSize: 11,
+    fontWeight: 600,
+    padding: "5px 10px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+  },
+  dangerBtn: { marginTop: 8, background: "#B00020", color: "#fff", border: "none", fontSize: 11, fontWeight: 600, padding: "6px 10px", cursor: "pointer" },
   select: { padding: "8px 10px", border: "1px solid #DADDE1", fontSize: 13, background: "#fff" },
   exportBtn: {
     marginLeft: "auto",

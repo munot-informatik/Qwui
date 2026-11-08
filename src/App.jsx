@@ -3,7 +3,7 @@ import logoImg from "./assets/logo.png";
 import QrBillDocument from "./QrBillDocument.jsx";
 import BuchhaltungTab from "./BuchhaltungTab.jsx";
 import { buildReceiptPdfBytes } from "./receiptPdf.js";
-import { isValidSwissIban, formatIbanDisplay } from "./qrbill.js";
+import { isValidSwissIban, formatIbanDisplay, isQrIban } from "./qrbill.js";
 import {
   itemKind,
   itemQuantity,
@@ -33,7 +33,7 @@ import {
   appendMovements,
 } from "../shared/stock.js";
 import { UNIT_STATUS, isSellable, checkNewSerials } from "../shared/serials.js";
-import { StockCell, UnitList, Wareneingang, SeriennummerSuche, Lagerbewegungen } from "./Lager.jsx";
+import { StockCell, UnitList, Wareneingang, SeriennummerSuche, Lagerbewegungen, ArticleForm } from "./Lager.jsx";
 import EmailEinstellungen from "./EmailEinstellungen.jsx";
 import {
   hasEmailConsent,
@@ -50,6 +50,9 @@ import BackupAutomatik from "./BackupAutomatik.jsx";
 import ShopAnbindung from "./ShopAnbindung.jsx";
 import { Vorschlaege, Schnittstelle } from "./Assistent.jsx";
 import { LabelSheet, useLabelPrinter, LABEL_PRINT_CSS } from "./Etiketten.jsx";
+import { resolveSaleScan, applySaleScan } from "../shared/sale.js";
+import { localDateISO } from "../shared/dates.js";
+import { Kundenwahl, KundenListe, PersonFields, WALK_IN_NAME } from "./Kunden.jsx";
 import { findArticle } from "../shared/reports.js";
 
 // Direkter Versand per SMTP und automatische Sicherung gibt es nur in der
@@ -66,7 +69,6 @@ import {
   Building2,
   Users,
   FileText,
-  History,
   ArrowLeft,
   Check,
   Loader2,
@@ -126,6 +128,13 @@ const emptyCompany = {
 // Produkte aus dem Inventar tragen productId (Bezug für die Lagerbuchung),
 // seriennummernpflichtige zusätzlich unitId und serial des verkauften
 // Exemplars.
+
+// Gibt es die Artikelnummer schon (ohne Gross/Klein, ohne den Artikel exceptId)?
+function duplicateArticleNumber(inventory, number, exceptId = null) {
+  const wanted = String(number || "").trim().toLowerCase();
+  if (!wanted) return false;
+  return inventory.some((p) => p.id !== exceptId && String(p.articleNumber || "").trim().toLowerCase() === wanted);
+}
 
 function emptyItem() {
   return {
@@ -248,9 +257,8 @@ function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
+// Lokales Kalenderdatum, nicht UTC (siehe shared/dates.js).
+const todayISO = () => localDateISO();
 
 function formatDateTimeDE(iso) {
   const d = new Date(iso);
@@ -296,6 +304,9 @@ export default function ReceiptApp() {
   // gerade in echtem Excel geöffnet) — bei D1 kam das kaum vor, war deshalb
   // bisher nur ein stiller console.error.
   const [persistError, setPersistError] = useState("");
+  // Ein anderes Gerät/Fenster hat inzwischen gespeichert (nur Web-Version):
+  // Speichern ist gesperrt, bis neu geladen wird.
+  const [persistConflict, setPersistConflict] = useState(false);
   const [labelJob, printLabels] = useLabelPrinter();
 
   const [company, setCompany] = useState(emptyCompany);
@@ -317,6 +328,9 @@ export default function ReceiptApp() {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [manualCustomer, setManualCustomer] = useState(emptyPerson);
   const [date, setDate] = useState(todayISO());
+  // Von Hand gewähltes Datum bleibt stehen; sonst folgt es dem heutigen Tag —
+  // auch wenn Qwui über Nacht offen bleibt.
+  const [dateTouched, setDateTouched] = useState(false);
   const [items, setItems] = useState([emptyItem()]);
   const [note, setNote] = useState("");
   const [vatEnabled, setVatEnabled] = useState(false);
@@ -331,6 +345,7 @@ export default function ReceiptApp() {
   const [mailState, setMailState] = useState({ state: "idle", to: "", error: "" });
 
   const [newCustomer, setNewCustomer] = useState(emptyPerson);
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
 
   // Immer der neueste Stand, auch für Code, der nach einem langen await
   // weiterläuft (z. B. der Mailversand) — dessen Closure kennt nur den Stand
@@ -413,7 +428,8 @@ export default function ReceiptApp() {
       return true;
     } catch (e) {
       console.error("Speichern fehlgeschlagen", e);
-      setPersistError(`Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
+      if (e.conflict) setPersistConflict(true);
+      setPersistError(e.conflict ? e.message : `Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
       return false;
     }
   }
@@ -453,7 +469,8 @@ export default function ReceiptApp() {
       return true;
     } catch (e) {
       console.error("Speichern der Lagerbuchung fehlgeschlagen", e);
-      setPersistError(`Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
+      if (e.conflict) setPersistConflict(true);
+      setPersistError(e.conflict ? e.message : `Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
       setInventory(before.inventory);
       setUnits(before.units);
       setMovementsByKey(previousMovements);
@@ -488,6 +505,8 @@ export default function ReceiptApp() {
     setSaveStatus("Firmendaten gespeichert");
     setTimeout(() => setSaveStatus(""), 2000);
   }
+
+  const companyDirty = JSON.stringify(companyDraft) !== JSON.stringify(company);
 
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoError, setLogoError] = useState("");
@@ -649,7 +668,8 @@ export default function ReceiptApp() {
           setMovementsByKey(imported);
         } catch (e) {
           console.error("Import der Lagerbewegungen fehlgeschlagen", e);
-          setPersistError(`Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
+          if (e.conflict) setPersistConflict(true);
+          setPersistError(e.conflict ? e.message : `Speichern fehlgeschlagen: ${e.message || "unbekannter Fehler"}`);
           okStock = false;
         }
       }
@@ -704,6 +724,21 @@ export default function ReceiptApp() {
     const next = [...customers, { ...withoutUnconsentedEmail(newCustomer), id: uid() }];
     await persist(KEYS.customers, next, setCustomers);
     setNewCustomer(emptyPerson);
+    setShowNewCustomer(false);
+  }
+
+  async function updateCustomer(person) {
+    noticeIfEmailDropped(person);
+    const next = customers.map((c) => (c.id === person.id ? { ...withoutUnconsentedEmail(person), id: c.id } : c));
+    await persist(KEYS.customers, next, setCustomers);
+  }
+
+  function selectCustomer(id) {
+    setSelectedCustomerId(id);
+    if (id) setManualCustomer(emptyPerson);
+    // Die Versandadresse gehört zum bisherigen Empfänger.
+    setDeliveryTo(null);
+    setDeliveryMail(null);
   }
 
   async function saveManualCustomerToList() {
@@ -735,31 +770,13 @@ export default function ReceiptApp() {
 
   // ---- Inventar ----
   const [newProduct, setNewProduct] = useState(emptyProduct);
+  const [showNewProduct, setShowNewProduct] = useState(false);
+  const [showExcel, setShowExcel] = useState(false);
+  // Artikelzeilen sind nur zur Ansicht; bearbeitet wird nach «Bearbeiten»,
+  // damit kein Preis versehentlich beim Durchscrollen ändert.
+  const [editingProductId, setEditingProductId] = useState(null);
   const [inventoryError, setInventoryError] = useState("");
   const [inventoryBusy, setInventoryBusy] = useState(false);
-
-  // Ob die Import-Anleitung eingeblendet ist. Reine Anzeige-Einstellung, daher
-  // im Browser gespeichert statt in der Datenbank — wer das System kennt,
-  // blendet sie einmal aus und sie bleibt weg.
-  const [showImportHelp, setShowImportHelp] = useState(() => {
-    try {
-      return window.localStorage.getItem("qwui:importHelpHidden") !== "1";
-    } catch (e) {
-      return true;
-    }
-  });
-
-  function toggleImportHelp() {
-    setShowImportHelp((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem("qwui:importHelpHidden", next ? "0" : "1");
-      } catch (e) {
-        // Privater Modus o.ä. — dann gilt die Einstellung nur für diese Sitzung.
-      }
-      return next;
-    });
-  }
 
   const [inventorySearch, setInventorySearch] = useState("");
   const [inventoryGroupFilter, setInventoryGroupFilter] = useState("");
@@ -827,6 +844,12 @@ export default function ReceiptApp() {
   // Liefert den neuen Artikel zurück (für den Wareneingang).
   async function addProduct(fields = newProduct) {
     if (!fields.name.trim()) return null;
+    const number = String(fields.articleNumber || "").trim();
+    if (number && duplicateArticleNumber(inventory, number)) {
+      setInventoryError(`Artikelnummer ${number} gibt es schon im Inventar — Scanner fänden sonst nur einen der beiden Artikel.`);
+      return null;
+    }
+    setInventoryError("");
     cancelPendingInventorySave();
     const serialTracked = !!fields.serialTracked;
     const entry = {
@@ -844,7 +867,12 @@ export default function ReceiptApp() {
     const initial = serialTracked ? 0 : Number(fields.stock) || 0;
     const result = correctStock({ inventory: [...inventory, entry], units }, entry.id, initial, stockCtx(), "Anfangsbestand");
     if (!(await commitStock(result))) return null;
-    if (fields === newProduct) setNewProduct(emptyProduct);
+    if (fields === newProduct) {
+      setNewProduct(emptyProduct);
+      setShowNewProduct(false);
+      setSaveStatus(`«${entry.name}» angelegt`);
+      setTimeout(() => setSaveStatus(""), 2500);
+    }
     return entry;
   }
 
@@ -1237,6 +1265,80 @@ export default function ReceiptApp() {
     );
   }
 
+  // Datum nachführen, wenn Mitternacht vorbei ist (nicht beim Bearbeiten und
+  // nicht, wenn jemand ein Datum gewählt hat).
+  useEffect(() => {
+    if (editingReceiptId || dateTouched) return undefined;
+    const update = () => setDate((d) => (d === todayISO() ? d : todayISO()));
+    update();
+    const timer = setInterval(update, 60 * 1000);
+    window.addEventListener("focus", update);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", update);
+    };
+  }, [editingReceiptId, dateTouched, tab]);
+
+  // ---- Einrichtung: was noch fehlt, oben auf «Neue Quittung» ----
+  const [setupState, setSetupState] = useState({ mail: true, backup: true });
+  const [setupHidden, setSetupHidden] = useState(() => {
+    try {
+      return window.localStorage.getItem("qwui:setupHidden") === "1";
+    } catch (e) {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (tab !== "new") return undefined;
+    let cancelled = false;
+    (async () => {
+      const next = { mail: true, backup: true };
+      try {
+        if (desktopMail) next.mail = !!(await desktopMail.getSettings()).settings?.host;
+        if (desktopBackup) next.backup = !(await desktopBackup.getState()).notReady;
+      } catch (e) {
+        // Nur ein Hinweis — lieber nichts zeigen als etwas Falsches.
+      }
+      if (!cancelled) setSetupState(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+  const setupTodo = [
+    !String(company.name || "").trim() && { label: "Firmendaten eintragen — sie stehen auf jedem Beleg", tab: "company" },
+    desktopMail && !setupState.mail && { label: "E-Mail-Versand einrichten, damit Belege direkt an Kunden gehen", tab: "mail" },
+    desktopBackup && !setupState.backup && { label: "Automatische Sicherung einschalten", tab: "backup" },
+  ].filter(Boolean);
+
+  function hideSetup() {
+    setSetupHidden(true);
+    try {
+      window.localStorage.setItem("qwui:setupHidden", "1");
+    } catch (e) {
+      // gilt dann nur für diese Sitzung
+    }
+  }
+
+  // ---- Verkauf per Scan ----
+  // Seriennummer oder Artikelnummer scannen (Scanner tippt den Code und drückt
+  // Enter). Das Feld behält den Fokus für das nächste Stück.
+  const [saleScan, setSaleScan] = useState("");
+  const [saleScanMsg, setSaleScanMsg] = useState(null); // { kind: "ok" | "error", text }
+
+  function handleSaleScan() {
+    const scan = resolveSaleScan(saleScan, { inventory, units, items, editingReceiptId });
+    if (scan.error !== undefined) {
+      if (scan.error) setSaleScanMsg({ kind: "error", text: scan.error });
+      setSaleScan("");
+      return;
+    }
+    const result = applySaleScan(items, scan, emptyItem);
+    setItems(result.items);
+    setSaleScanMsg({ kind: "ok", text: result.message });
+    setSaleScan("");
+  }
+
   function pickUnit(id, unitId) {
     const unit = units.find((u) => u.id === unitId);
     setItems(items.map((it) => (it.id === id ? { ...it, unitId: unit ? unit.id : "", serial: unit ? unit.serial : "" } : it)));
@@ -1282,6 +1384,7 @@ export default function ReceiptApp() {
     setSelectedCustomerId("");
     setManualCustomer(emptyPerson);
     setDate(todayISO());
+    setDateTouched(false);
     setItems([emptyItem()]);
     setNote("");
     setVatEnabled(false);
@@ -1292,6 +1395,8 @@ export default function ReceiptApp() {
     setDeliveryMail(null);
     setDeliveryTo(null);
     setDeliveryPrint(false);
+    setSaleScan("");
+    setSaleScanMsg(null);
   }
 
   function getActiveCustomer() {
@@ -1299,7 +1404,8 @@ export default function ReceiptApp() {
       const c = customers.find((c) => c.id === selectedCustomerId);
       if (c) return c;
     }
-    return manualCustomer;
+    // Ohne Kunde und ohne eingegebenen Namen geht die Quittung an «Laufkunde».
+    return manualCustomer.name.trim() ? manualCustomer : { ...manualCustomer, name: WALK_IN_NAME };
   }
 
   const activeCustomer = getActiveCustomer();
@@ -1377,7 +1483,7 @@ export default function ReceiptApp() {
         setEditingReceiptId(null);
         return;
       }
-      const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban);
+      const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban) && !isQrIban(company.qrBill?.iban);
       // War die Quittung vorher schon eine QR-Rechnung, bleibt ihr Bezahlt-Status
       // erhalten. Wird sie beim Bearbeiten NEU zur QR-Rechnung (vorher
       // Direktzahlung, deren "paid" immer true ist), muss sie als offen starten
@@ -1392,7 +1498,7 @@ export default function ReceiptApp() {
       // die aktuellen Zahlungsdaten enthalten: sonst prüft isQrBill die IBAN
       // der *heutigen* Firmendaten, der Einzahlungsschein wird danach aber aus
       // dem *alten* Snapshot gebaut — mit leerer IBAN und damit unbezahlbar.
-      const snapshotIbanUsable = isValidSwissIban(existing.company?.qrBill?.iban);
+      const snapshotIbanUsable = isValidSwissIban(existing.company?.qrBill?.iban) && !isQrIban(existing.company?.qrBill?.iban);
       const companySnapshot = isQrBill && !snapshotIbanUsable ? company : existing.company;
       const draft = {
         ...existing,
@@ -1433,7 +1539,7 @@ export default function ReceiptApp() {
     }
 
     const number = nextReceiptNumber(receipts, lastNumber);
-    const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban);
+    const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban) && !isQrIban(company.qrBill?.iban);
     const draft = {
       id: uid(),
       number,
@@ -1489,8 +1595,14 @@ export default function ReceiptApp() {
     const matchingCustomer =
       customers.find((c) => r.customer.id && c.id === r.customer.id) ||
       (!r.customer.id && customers.find((c) => c.name === r.customer.name && c.email === r.customer.email));
+    const walkIn =
+      r.customer.name === WALK_IN_NAME &&
+      !["address", "street", "houseNumber", "postalCode", "city", "email", "phone"].some((f) => String(r.customer[f] || "").trim());
     if (matchingCustomer) {
       setSelectedCustomerId(matchingCustomer.id);
+      setManualCustomer(emptyPerson);
+    } else if (walkIn) {
+      setSelectedCustomerId("");
       setManualCustomer(emptyPerson);
     } else {
       setSelectedCustomerId("");
@@ -1509,6 +1621,7 @@ export default function ReceiptApp() {
     setDeliveryMail(null);
     setDeliveryTo(null);
     setDate(r.date);
+    setDateTouched(true);
     setItems(r.items.map((it) => ({ ...emptyItem(), ...it, quantity: String(itemQuantity(it)), id: uid() })));
     setStockErrors([]);
     setStockWarnings([]);
@@ -1808,6 +1921,28 @@ export default function ReceiptApp() {
         }
         .receipt-app input:focus, .receipt-app textarea:focus { border-color: #E30613; }
         .navbtn { transition: background 0.12s ease; }
+        /* Telefon: Navigation als Leiste oben statt Seitenleiste, schmalere Ränder.
+           Die Seiten selbst sind schon schmal genug (max. 640 px). */
+        @media screen and (max-width: 760px) {
+          .qwui-shell { flex-direction: column !important; }
+          .qwui-sidebar {
+            width: auto !important;
+            flex-direction: row !important;
+            align-items: center;
+            overflow-x: auto;
+            border-right: none !important;
+            border-bottom: 1px solid #E4E5E7;
+            padding: 8px !important;
+            position: sticky;
+            top: 0;
+            z-index: 30;
+          }
+          .qwui-sidebar .navbtn { white-space: nowrap; flex-shrink: 0; width: auto !important; border-left: none !important; padding: 8px 10px !important; }
+          .qwui-brand, .qwui-sidebar-footer, .qwui-navsection { display: none !important; }
+          .qwui-main { padding: 20px 16px !important; max-width: none !important; min-width: 0; overflow-x: auto; }
+          .qwui-main input, .qwui-main select, .qwui-main textarea { max-width: 100%; }
+          .qwui-itemrow { flex-wrap: wrap; }
+        }
         .navbtn:hover { background: #F1F1EF; }
         @media print {
           .no-print { display: none !important; }
@@ -1823,15 +1958,20 @@ export default function ReceiptApp() {
       <LabelSheet job={labelJob} />
 
       {persistError && (
-        <div className="no-print" style={styles.persistErrorBanner}>
+        <div className="no-print" style={styles.persistErrorBanner} role="alert">
           {persistError}
+          {persistConflict && (
+            <button type="button" onClick={() => window.location.reload()} style={{ ...styles.secondaryBtnSmall, marginLeft: 12 }}>
+              Neu laden
+            </button>
+          )}
         </div>
       )}
 
       {mode === "form" && (
-        <div style={styles.shell}>
-          <nav className="no-print" style={styles.sidebar}>
-            <div style={styles.brand}>
+        <div className="qwui-shell" style={styles.shell}>
+          <nav className="no-print qwui-sidebar" style={styles.sidebar}>
+            <div className="qwui-brand" style={styles.brand}>
               <img src={logoImg} alt="Qwui Logo" style={styles.brandMark} />
               <div>
                 <div style={styles.brandTitle}>Qwui</div>
@@ -1839,25 +1979,21 @@ export default function ReceiptApp() {
               </div>
             </div>
             <NavItem icon={FileText} label="Neue Quittung" active={tab === "new"} onClick={() => setTab("new")} />
+            <NavItem icon={Wallet} label="Belege" active={tab === "receipts"} onClick={() => setTab("receipts")} />
             <NavItem icon={Users} label="Kunden" active={tab === "customers"} onClick={() => setTab("customers")} />
             <NavItem icon={Package} label="Inventar" active={tab === "inventory"} onClick={() => setTab("inventory")} />
-            {desktopShop && (
-              <NavItem icon={Store} label="Shop-Anbindung" active={tab === "shop"} onClick={() => setTab("shop")} />
+            {desktopAssistant && openDraftCount > 0 && (
+              <NavItem icon={Bot} label={`Vorschläge (${openDraftCount})`} active={tab === "drafts"} onClick={() => setTab("drafts")} />
             )}
-            {desktopAssistant && (
-              <NavItem
-                icon={Bot}
-                label={openDraftCount ? `Assistent (${openDraftCount})` : "Assistent"}
-                active={tab === "assistant"}
-                onClick={() => setTab("assistant")}
-              />
-            )}
+
+            <div className="qwui-navsection" style={styles.navSection}>Einstellungen</div>
             <NavItem icon={Building2} label="Firma" active={tab === "company"} onClick={() => setTab("company")} />
-            <NavItem icon={History} label="Verlauf" active={tab === "history"} onClick={() => setTab("history")} />
-            <NavItem icon={Wallet} label="Buchhaltung" active={tab === "accounting"} onClick={() => setTab("accounting")} />
+            {desktopMail && <NavItem icon={Mail} label="E-Mail" active={tab === "mail"} onClick={() => setTab("mail")} />}
+            {desktopShop && <NavItem icon={Store} label="Shop" active={tab === "shop"} onClick={() => setTab("shop")} />}
+            {desktopAssistant && <NavItem icon={Bot} label="Assistent" active={tab === "assistant"} onClick={() => setTab("assistant")} />}
             <NavItem icon={RefreshCw} label="Backup" active={tab === "backup"} onClick={() => setTab("backup")} />
 
-            <div style={styles.sidebarFooter}>
+            <div className="qwui-sidebar-footer" style={styles.sidebarFooter}>
               <a
                 href="https://github.com/munot-informatik/Qwui"
                 target="_blank"
@@ -1878,12 +2014,13 @@ export default function ReceiptApp() {
           </nav>
 
           <main
+            className="qwui-main"
             style={{
               ...styles.main,
-              ...(tab === "accounting" ? { maxWidth: 880 } : {}),
+              ...(tab === "receipts" ? { maxWidth: 880 } : {}),
               // Artikeltabelle, Exemplare und Bewegungen brauchen mehr Breite.
               ...(tab === "inventory" ? { maxWidth: 1040 } : {}),
-              ...(tab === "shop" || tab === "assistant" ? { maxWidth: 880 } : {}),
+              ...(tab === "shop" || tab === "assistant" || tab === "drafts" ? { maxWidth: 880 } : {}),
             }}
           >
             {tab === "new" && (
@@ -1892,6 +2029,21 @@ export default function ReceiptApp() {
                 <h1 style={styles.h1}>
                   {editingReceiptId ? "Quittung bearbeiten" : "Neue Quittung erstellen"}
                 </h1>
+                {!editingReceiptId && !setupHidden && setupTodo.length > 0 && (
+                  <div style={styles.setupBox}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                      <span style={{ fontWeight: 600 }}>Noch einzurichten</span>
+                      <button type="button" style={{ ...styles.linkBtn, color: "#8B8F96" }} onClick={hideSetup}>
+                        Ausblenden
+                      </button>
+                    </div>
+                    {setupTodo.map((x) => (
+                      <button key={x.tab} type="button" style={styles.setupItem} onClick={() => setTab(x.tab)}>
+                        → {x.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {editingReceiptId && (
                   <div style={styles.editBanner}>
                     <span>
@@ -1911,97 +2063,56 @@ export default function ReceiptApp() {
                   <input
                     type="date"
                     value={date}
-                    onChange={(e) => setDate(e.target.value)}
+                    onChange={(e) => {
+                      setDate(e.target.value);
+                      setDateTouched(true);
+                    }}
                     style={{ width: 180 }}
                   />
                 </FieldGroup>
 
-                <FieldGroup label="Empfänger">
-                  {customers.length > 0 && (
-                    <select
-                      value={selectedCustomerId}
-                      onChange={(e) => {
-                        setSelectedCustomerId(e.target.value);
-                        if (e.target.value) setManualCustomer(emptyPerson);
-                        // Die Versandadresse gehört zum bisherigen Empfänger.
-                        setDeliveryTo(null);
-                        setDeliveryMail(null);
-                      }}
-                      style={styles.select}
-                    >
-                      <option value="">— gespeicherten Kunden wählen —</option>
-                      {customers.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {!selectedCustomerId && (
-                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                      <input
-                        placeholder="Name"
-                        value={manualCustomer.name}
-                        onChange={(e) => setManualCustomer({ ...manualCustomer, name: e.target.value })}
-                      />
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input
-                          placeholder="Strasse"
-                          value={manualCustomer.street}
-                          onChange={(e) => setManualCustomer({ ...manualCustomer, street: e.target.value })}
-                          style={{ flex: 2 }}
-                        />
-                        <input
-                          placeholder="Nr."
-                          value={manualCustomer.houseNumber}
-                          onChange={(e) => setManualCustomer({ ...manualCustomer, houseNumber: e.target.value })}
-                          style={{ flex: 1 }}
-                        />
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input
-                          placeholder="PLZ"
-                          value={manualCustomer.postalCode}
-                          onChange={(e) => setManualCustomer({ ...manualCustomer, postalCode: e.target.value })}
-                          style={{ flex: 1 }}
-                        />
-                        <input
-                          placeholder="Ort"
-                          value={manualCustomer.city}
-                          onChange={(e) => setManualCustomer({ ...manualCustomer, city: e.target.value })}
-                          style={{ flex: 2 }}
-                        />
-                      </div>
-                      <input
-                        placeholder="E-Mail"
-                        value={manualCustomer.email}
-                        onChange={(e) => setManualCustomer({ ...manualCustomer, email: e.target.value })}
-                      />
-                      {manualCustomer.email && <ConsentCheckbox person={manualCustomer} onChange={setManualCustomer} />}
-                      <input
-                        placeholder="Telefon (für WhatsApp, z.B. +41 79 123 45 67)"
-                        value={manualCustomer.phone}
-                        onChange={(e) => setManualCustomer({ ...manualCustomer, phone: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        onClick={saveManualCustomerToList}
-                        disabled={!manualCustomer.name.trim()}
-                        style={{ ...styles.secondaryBtn, opacity: manualCustomer.name.trim() ? 1 : 0.4 }}
-                      >
-                        <Plus size={14} /> Kunde speichern
-                      </button>
-                    </div>
-                  )}
-                  {needsAddress && !personHasAddress(activeCustomer) && (
-                    <div style={styles.hint}>
-                      Ab CHF 400 ist die Adresse des Käufers gesetzlich vorgeschrieben (OR Art. 958f).
-                    </div>
-                  )}
+                <FieldGroup label="Kunde">
+                  <Kundenwahl
+                    customers={customers}
+                    selectedCustomerId={selectedCustomerId}
+                    onSelect={selectCustomer}
+                    manualCustomer={manualCustomer}
+                    onManualChange={setManualCustomer}
+                    onSaveManual={saveManualCustomerToList}
+                    emptyPerson={emptyPerson}
+                    qrBillEnabled={qrBillEnabled && !personHasAddress(activeCustomer)}
+                    addressRequired={needsAddress && !personHasAddress(activeCustomer)}
+                  />
                 </FieldGroup>
 
                 <FieldGroup label="Leistungen">
-                  <div style={{ display: "grid", gap: 14 }}>
+                  {inventory.length > 0 && (
+                    <div style={styles.saleScanBox}>
+                      <input
+                        value={saleScan}
+                        onChange={(e) => setSaleScan(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleSaleScan();
+                          }
+                        }}
+                        placeholder="Scannen: Seriennummer oder Artikelnummer, Enter"
+                        className="mono"
+                        style={{ flex: 1, minWidth: 220 }}
+                        aria-label="Artikel scannen"
+                      />
+                      <button type="button" onClick={handleSaleScan} disabled={!saleScan.trim()} style={{ ...styles.secondaryBtn, opacity: saleScan.trim() ? 1 : 0.4 }}>
+                        Hinzufügen
+                      </button>
+                    </div>
+                  )}
+                  {saleScanMsg && (
+                    <div style={saleScanMsg.kind === "error" ? styles.scanError : styles.scanOk} role="status">
+                      {saleScanMsg.text}
+                    </div>
+                  )}
+                  <div style={{ display: "grid", gap: 14, marginTop: inventory.length > 0 ? 12 : 0 }}>
                     {items.map((it) => {
                       const kind = itemKind(it);
                       const disc = itemDiscountPercent(it);
@@ -2009,7 +2120,7 @@ export default function ReceiptApp() {
                       const serialTracked = isSerialTracked(product);
                       return (
                         <div key={it.id} style={styles.itemCard}>
-                          <div style={styles.itemRow}>
+                          <div className="qwui-itemrow" style={styles.itemRow}>
                             <KindToggle
                               kind={kind}
                               onChange={(k) => setItemKind(it.id, k)}
@@ -2235,7 +2346,7 @@ export default function ReceiptApp() {
                     </div>
                   )}
 
-                  {qrBillEnabled && !isValidSwissIban(company.qrBill?.iban) && (
+                  {qrBillEnabled && (!isValidSwissIban(company.qrBill?.iban) || isQrIban(company.qrBill?.iban)) && (
                     <div style={styles.hint}>
                       Dafür brauchst du eine gültige IBAN unter{" "}
                       <button
@@ -2317,93 +2428,38 @@ export default function ReceiptApp() {
                 <Eyebrow>02 — Kunden</Eyebrow>
                 <h1 style={styles.h1}>Kundenverwaltung</h1>
 
-                <div style={{ display: "grid", gap: 8, maxWidth: 420 }}>
-                  <input
-                    placeholder="Name"
-                    value={newCustomer.name}
-                    onChange={(e) => setNewCustomer({ ...newCustomer, name: e.target.value })}
-                  />
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <input
-                      placeholder="Strasse"
-                      value={newCustomer.street}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, street: e.target.value })}
-                      style={{ flex: 2 }}
-                    />
-                    <input
-                      placeholder="Nr."
-                      value={newCustomer.houseNumber}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, houseNumber: e.target.value })}
-                      style={{ flex: 1 }}
-                    />
+                {showNewCustomer ? (
+                  <div style={{ ...styles.card, maxWidth: 420, marginBottom: 20 }}>
+                    <PersonFields person={newCustomer} onChange={setNewCustomer} autoFocus />
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <button onClick={addCustomer} disabled={!newCustomer.name.trim()} style={{ ...styles.primaryBtn, opacity: newCustomer.name.trim() ? 1 : 0.4 }}>
+                        Kunde speichern
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowNewCustomer(false);
+                          setNewCustomer(emptyPerson);
+                        }}
+                        style={styles.secondaryBtn}
+                      >
+                        Abbrechen
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <input
-                      placeholder="PLZ"
-                      value={newCustomer.postalCode}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, postalCode: e.target.value })}
-                      style={{ flex: 1 }}
-                    />
-                    <input
-                      placeholder="Ort"
-                      value={newCustomer.city}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, city: e.target.value })}
-                      style={{ flex: 2 }}
-                    />
-                  </div>
-                  <input
-                    placeholder="E-Mail"
-                    value={newCustomer.email}
-                    onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
-                  />
-                  {newCustomer.email && <ConsentCheckbox person={newCustomer} onChange={setNewCustomer} />}
-                  <input
-                    placeholder="Telefon (für WhatsApp, z.B. +41 79 123 45 67)"
-                    value={newCustomer.phone}
-                    onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })}
-                  />
-                  <button onClick={addCustomer} style={styles.secondaryBtn}>
-                    <Plus size={14} /> Kunde speichern
+                ) : (
+                  <button onClick={() => setShowNewCustomer(true)} style={{ ...styles.secondaryBtn, marginBottom: 16 }}>
+                    <Plus size={14} /> Neuer Kunde
                   </button>
-                  {customerNotice && <div style={styles.hint}>{customerNotice}</div>}
-                </div>
+                )}
+                {customerNotice && <div style={{ ...styles.hint, maxWidth: 420, marginBottom: 12 }}>{customerNotice}</div>}
 
-                <div style={{ marginTop: 24 }}>
-                  {customers.length === 0 ? (
-                    <EmptyState text="Noch keine Kunden gespeichert." />
-                  ) : (
-                    customers.map((c) => (
-                      <div key={c.id} style={styles.listRow}>
-                        <div>
-                          <div style={{ fontWeight: 600 }}>{c.name}</div>
-                          {personAddressLines(c).map((l, i) => (
-                            <div style={styles.muted} key={i}>{l}</div>
-                          ))}
-                          <div style={styles.muted}>{c.email}</div>
-                          {hasEmailConsent(c) && c.email && (
-                            <div style={styles.muted}>Einverständnis E-Mail-Beleg seit {formatDateDE(c.emailConsent.at)}</div>
-                          )}
-                          {hasLegacyEmailWithoutConsent(c) && (
-                            <div style={{ ...styles.muted, color: "#B5480C" }}>
-                              Einverständnis E-Mail-Beleg fehlt —{" "}
-                              <button type="button" style={styles.linkBtn} onClick={() => setCustomerConsent(c.id, true)}>
-                                erfassen
-                              </button>{" "}
-                              oder{" "}
-                              <button type="button" style={styles.linkBtn} onClick={() => setCustomerConsent(c.id, false)}>
-                                Adresse entfernen
-                              </button>
-                            </div>
-                          )}
-                          {c.phone && <div style={styles.muted}>{c.phone}</div>}
-                        </div>
-                        <button onClick={() => deleteCustomer(c.id)} style={styles.iconBtn}>
-                          <Trash2 size={14} color="#70747C" />
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
+                <KundenListe
+                  customers={customers}
+                  onSave={updateCustomer}
+                  onDelete={deleteCustomer}
+                  onConsent={setCustomerConsent}
+                  emptyPerson={emptyPerson}
+                />
               </div>
             )}
 
@@ -2464,78 +2520,34 @@ export default function ReceiptApp() {
                 {inventoryView === "articles" && (
                 <>
                 <div style={{ height: 20 }} />
-                <FieldGroup label="Neuen Artikel erfassen">
-                  <div style={styles.inventoryForm}>
-                    <input
-                      placeholder="Artikelnummer"
-                      value={newProduct.articleNumber}
-                      onChange={(e) => setNewProduct({ ...newProduct, articleNumber: e.target.value })}
-                      style={{ width: 130 }}
-                    />
-                    <input
-                      placeholder="Artikel-Name"
-                      value={newProduct.name}
-                      onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
-                      style={{ flex: 1, minWidth: 160 }}
-                    />
-                    {/* Freies Feld mit Vorschlägen: bestehende Gruppen lassen
-                        sich per Klick übernehmen, neue einfach eintippen. */}
-                    <input
-                      placeholder="Produktgruppe"
-                      list="produktgruppen"
-                      value={newProduct.group}
-                      onChange={(e) => setNewProduct({ ...newProduct, group: e.target.value })}
-                      style={{ width: 150 }}
-                    />
-                    {!newProduct.serialTracked && (
-                      <input
-                        placeholder="Stück"
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={newProduct.stock}
-                        onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })}
-                        className="mono"
-                        style={{ width: 80, textAlign: "right" }}
-                      />
-                    )}
-                    <div style={styles.amountWrap}>
-                      <span className="mono" style={styles.chfLabel}>CHF</span>
-                      <input
-                        placeholder="0.00"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={newProduct.price}
-                        onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
-                        className="mono"
-                        style={{ width: 90, textAlign: "right" }}
-                      />
-                    </div>
-                    <label style={styles.checkLabel} title="Einzelstücke mit eigener Seriennummer, z. B. hochpreisige Queues">
-                      <input
-                        type="checkbox"
-                        checked={!!newProduct.serialTracked}
-                        onChange={(e) => setNewProduct({ ...newProduct, serialTracked: e.target.checked })}
-                      />
-                      Seriennummernpflichtig
-                    </label>
-                    <button
-                      onClick={() => addProduct()}
-                      disabled={!newProduct.name.trim()}
-                      style={{ ...styles.secondaryBtn, opacity: newProduct.name.trim() ? 1 : 0.4 }}
-                    >
-                      <Plus size={14} /> Hinzufügen
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {!showNewProduct && (
+                    <button onClick={() => setShowNewProduct(true)} style={styles.primaryBtn}>
+                      <Plus size={14} /> Neuer Artikel
                     </button>
-                  </div>
-                  {newProduct.serialTracked && (
-                    <div style={{ ...styles.muted, marginTop: 6 }}>
-                      Der Bestand ergibt sich aus den Exemplaren — Seriennummern danach im Wareneingang scannen.
-                    </div>
                   )}
-                </FieldGroup>
+                  <button onClick={() => setShowExcel((v) => !v)} style={styles.secondaryBtn} aria-expanded={showExcel}>
+                    <Download size={14} /> Excel-Import/Export
+                  </button>
+                  {saveStatus && <span style={styles.savedMsg}>{saveStatus}</span>}
+                </div>
+                {showNewProduct && (
+                  <ArticleForm
+                    value={newProduct}
+                    onChange={setNewProduct}
+                    groups={inventoryGroups.filter((g) => g !== UNGROUPED_LABEL)}
+                    showStock
+                    submitLabel="Artikel anlegen"
+                    onSubmit={() => addProduct()}
+                    onCancel={() => {
+                      setShowNewProduct(false);
+                      setNewProduct(emptyProduct);
+                    }}
+                  />
+                )}
 
-                <FieldGroup label="Excel">
+                {showExcel && (
+                <div style={{ marginTop: 16 }}>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <button
                       onClick={exportInventoryExcel}
@@ -2555,38 +2567,16 @@ export default function ReceiptApp() {
                       />
                     </label>
                   </div>
-                  <div style={styles.helpToggleRow}>
-                    <button
-                      type="button"
-                      onClick={toggleImportHelp}
-                      style={styles.linkBtn}
-                      aria-expanded={showImportHelp}
-                      aria-controls="import-anleitung"
-                    >
-                      {showImportHelp ? "Anleitung ausblenden" : "Anleitung anzeigen"}
-                    </button>
-                    {!showImportHelp && (
-                      <span style={{ fontSize: 12, color: "#8B8F96" }}>
-                        Spalten: Produktgruppe · Artikelnummer · Artikel-Name · Stückzahl verfügbar · Preis (CHF) · Seriennummernpflichtig (optional)
-                      </span>
-                    )}
+                  <div style={{ ...styles.hint, background: "#F1F1EF", color: "#5B5F66", marginTop: 8 }}>
+                    So muss die Datei aufgebaut sein — Spaltentitel in Zeile 1, ab Zeile 2 die Artikel:
+                    <ExcelLayoutHint />
+                    Beim Import werden Artikel mit bereits vorhandener Artikelnummer aktualisiert,
+                    alle anderen neu angelegt — bestehende Artikel gehen nicht verloren.
+                    Fehlt die Spalte „Produktgruppe" (ältere Datei), bleibt die bisherige Gruppe erhalten.
                   </div>
-
-                  {showImportHelp && (
-                    <div
-                      id="import-anleitung"
-                      style={{ ...styles.hint, background: "#F1F1EF", color: "#5B5F66", marginTop: 8 }}
-                    >
-                      So muss die Datei aufgebaut sein — Spaltentitel in Zeile 1, ab Zeile 2 die Artikel:
-                      <ExcelLayoutHint />
-                      Beim Import werden Artikel mit bereits vorhandener Artikelnummer aktualisiert,
-                      alle anderen neu angelegt — bestehende Artikel gehen nicht verloren.
-                      Fehlt die Spalte „Produktgruppe" (ältere Datei), bleibt die bisherige Gruppe erhalten.
-                    </div>
-                  )}
-                  {inventoryError && <div style={styles.hint}>{inventoryError}</div>}
-                  {saveStatus && <div style={styles.savedMsg}>{saveStatus}</div>}
-                </FieldGroup>
+                </div>
+                )}
+                {inventoryError && <div style={styles.hint}>{inventoryError}</div>}
 
                 <div style={{ marginTop: 8 }}>
                   {/* Vorschlagsliste für alle Gruppenfelder */}
@@ -2644,7 +2634,7 @@ export default function ReceiptApp() {
                         <span style={{ width: 80, textAlign: "right" }}>Stück</span>
                         <span style={{ width: 110, textAlign: "right" }}>Preis</span>
                         <span style={{ width: 90, textAlign: "center" }}>S/N-Pflicht</span>
-                        <span style={{ width: 34 }} />
+                        <span style={{ width: 96 }} />
                       </div>
                       {visibleInventory.length === 0 && (
                         <div style={{ ...styles.empty, padding: "16px 0" }}>
@@ -2653,7 +2643,28 @@ export default function ReceiptApp() {
                       )}
                       {visibleInventory.map((p) => (
                         <React.Fragment key={p.id}>
+                        {editingProductId !== p.id ? (
                         <div style={styles.invRow}>
+                          <span className="mono" style={{ width: 120, fontSize: 13 }}>{p.articleNumber || "—"}</span>
+                          <span style={{ flex: 1, minWidth: 140, fontSize: 13, fontWeight: 600 }}>{p.name}</span>
+                          <span style={{ width: 150, fontSize: 13, color: "#5B5F66" }}>{p.group || "—"}</span>
+                          <span className="mono" style={{ width: 80, textAlign: "right", fontSize: 13 }}>{productStock(p, units)}</span>
+                          <span className="mono" style={{ width: 110, textAlign: "right", fontSize: 13 }}>{chf(p.price)}</span>
+                          <span style={{ width: 90, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 12 }}>
+                            {isSerialTracked(p) ? (
+                              <button type="button" style={styles.linkBtn} onClick={() => toggleUnitList(p.id)}>
+                                {openUnitLists.has(p.id) ? "zu" : "Exemplare"}
+                              </button>
+                            ) : (
+                              <span style={styles.muted}>—</span>
+                            )}
+                          </span>
+                          <button type="button" onClick={() => setEditingProductId(p.id)} style={{ ...styles.secondaryBtnSmall, width: 96 }}>
+                            Bearbeiten
+                          </button>
+                        </div>
+                        ) : (
+                        <div style={{ ...styles.invRow, background: "#FDF8F3", flexWrap: "wrap" }}>
                           <input
                             value={p.articleNumber || ""}
                             onChange={(e) => updateProduct(p.id, "articleNumber", e.target.value)}
@@ -2699,8 +2710,17 @@ export default function ReceiptApp() {
                               </button>
                             )}
                           </span>
+                          <button type="button" onClick={() => setEditingProductId(null)} style={styles.secondaryBtnSmall}>
+                            Fertig
+                          </button>
+                          {p.articleNumber && duplicateArticleNumber(inventory, p.articleNumber, p.id) && (
+                            <div style={{ ...styles.hint, width: "100%" }} role="alert">
+                              Artikelnummer {p.articleNumber} gibt es schon bei einem anderen Artikel — bitte ändern, sonst findet der Scanner nur einen.
+                            </div>
+                          )}
                           <ConfirmDeleteButton label="" onConfirm={() => deleteProduct(p.id)} />
                         </div>
+                        )}
                         {isSerialTracked(p) && openUnitLists.has(p.id) && (
                           <UnitList
                             product={p}
@@ -2821,9 +2841,6 @@ export default function ReceiptApp() {
                         size={companyDraft.logoSize || "medium"}
                         logoDataUrl={companyDraft.logoDataUrl}
                       />
-                      <button onClick={saveCompany} style={{ ...styles.secondaryBtn, marginTop: 4 }}>
-                        <Check size={14} /> Speichern
-                      </button>
                     </div>
                   )}
                 </div>
@@ -2859,10 +2876,6 @@ export default function ReceiptApp() {
                     value={companyDraft.vatNumber}
                     onChange={(e) => setCompanyDraft({ ...companyDraft, vatNumber: e.target.value })}
                   />
-                  <button onClick={saveCompany} style={styles.secondaryBtn}>
-                    <Check size={14} /> Speichern
-                  </button>
-                  {saveStatus && <div style={styles.savedMsg}>{saveStatus}</div>}
                 </div>
 
                 <div style={{ marginTop: 32, maxWidth: 420 }}>
@@ -2897,10 +2910,12 @@ export default function ReceiptApp() {
                       <div
                         style={{
                           fontSize: 11,
-                          color: isValidSwissIban(companyDraft.qrBill.iban) ? "#1D7A3C" : "#B00020",
+                          color: isValidSwissIban(companyDraft.qrBill.iban) && !isQrIban(companyDraft.qrBill.iban) ? "#1D7A3C" : "#B00020",
                         }}
                       >
-                        {isValidSwissIban(companyDraft.qrBill.iban)
+                        {isValidSwissIban(companyDraft.qrBill.iban) && isQrIban(companyDraft.qrBill.iban)
+                          ? "Das ist eine QR-IBAN. Qwui braucht die normale IBAN des Kontos (steht ebenfalls im E-Banking)."
+                          : isValidSwissIban(companyDraft.qrBill.iban)
                           ? "✓ Gültige Schweizer IBAN"
                           : "IBAN unvollständig oder ungültig (muss mit CH/LI beginnen, 21 Zeichen)"}
                       </div>
@@ -2953,48 +2968,27 @@ export default function ReceiptApp() {
                         style={{ flex: 2 }}
                       />
                     </div>
-                    <button onClick={saveCompany} style={styles.secondaryBtn}>
-                      <Check size={14} /> Speichern
-                    </button>
                   </div>
                 </div>
 
-                {/* Nur in der Windows-Version vorhanden (window.qwuiDesktop). */}
-                <EmailEinstellungen />
+                <div style={styles.saveBar}>
+                  <button onClick={saveCompany} disabled={!companyDirty} style={{ ...styles.primaryBtn, opacity: companyDirty ? 1 : 0.4 }}>
+                    <Check size={14} /> Firmendaten speichern
+                  </button>
+                  {companyDirty ? (
+                    <span style={styles.muted}>Ungespeicherte Änderungen</span>
+                  ) : (
+                    saveStatus && <span style={styles.savedMsg}>{saveStatus}</span>
+                  )}
+                </div>
               </div>
             )}
 
-            {tab === "history" && (
+            {tab === "drafts" && desktopAssistant && (
               <div style={styles.panel}>
-                <Eyebrow>05 — Verlauf</Eyebrow>
-                <h1 style={styles.h1}>Bisherige Quittungen</h1>
-                {receipts.length === 0 ? (
-                  <EmptyState text="Noch keine Quittungen erstellt." />
-                ) : (
-                  [...receipts].reverse().map((r) => (
-                    <div key={r.id} style={styles.listRow}>
-                      <div>
-                        <div style={{ fontWeight: 600 }}>
-                          Nr. <span className="mono">{r.number}</span> · {r.customer.name}
-                        </div>
-                        <div style={styles.muted}>
-                          {formatDateDE(r.date)} · CHF {chf(r.total)}
-                          {r.editedAt ? " · bearbeitet" : ""}
-                          {r.emailDelivery ? ` · E-Mail ${r.emailDelivery.status}${r.emailDelivery.beforeEdit ? " (frühere Fassung)" : ""}` : ""}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => openReceipt(r)} style={styles.secondaryBtnSmall}>
-                          Öffnen
-                        </button>
-                        <button onClick={() => startEditReceipt(r)} style={styles.secondaryBtnSmall}>
-                          Bearbeiten
-                        </button>
-                        <ConfirmDeleteButton onConfirm={() => deleteReceipt(r.id)} />
-                      </div>
-                    </div>
-                  ))
-                )}
+                <Eyebrow>Assistent</Eyebrow>
+                <h1 style={styles.h1}>Vorschläge des Assistenten</h1>
+                <Vorschlaege drafts={drafts} describeArticle={describeDraftArticle} onAccept={acceptDraft} onReject={rejectDraft} />
               </div>
             )}
 
@@ -3016,9 +3010,23 @@ export default function ReceiptApp() {
               </div>
             )}
 
-            {tab === "accounting" && (
+            {tab === "receipts" && (
               <div style={styles.panel}>
-                <BuchhaltungTab receipts={receipts} onTogglePaid={togglePaid} />
+                <BuchhaltungTab
+                  receipts={receipts}
+                  onTogglePaid={togglePaid}
+                  onOpen={openReceipt}
+                  onEdit={startEditReceipt}
+                  onDelete={deleteReceipt}
+                />
+              </div>
+            )}
+
+            {tab === "mail" && desktopMail && (
+              <div style={styles.panel}>
+                <Eyebrow>Einstellungen</Eyebrow>
+                <h1 style={styles.h1}>E-Mail-Versand</h1>
+                <EmailEinstellungen />
               </div>
             )}
 
@@ -3516,7 +3524,9 @@ function NavItem({ icon: Icon, label, active, onClick }) {
 }
 
 function Eyebrow({ children }) {
-  return <div style={styles.eyebrow}>{children}</div>;
+  // Die Nummern («01 — …») passten nach dem Umbau der Seitenleiste nicht mehr.
+  const text = typeof children === "string" ? children.replace(/^\d+\s*—\s*/, "") : children;
+  return <div style={styles.eyebrow}>{text}</div>;
 }
 
 // Umschalter Dienstleistung/Produkt für eine einzelne Rechnungsposition.
@@ -3673,21 +3683,6 @@ function LogoLayoutPreview({ layout, align, size, logoDataUrl }) {
 }
 
 // Einverständnis «E-Mail-Beleg» mit Datum (siehe shared/consent.js).
-function ConsentCheckbox({ person, onChange }) {
-  return (
-    <label style={styles.checkLabel}>
-      <input
-        type="checkbox"
-        checked={hasEmailConsent(person)}
-        onChange={(e) =>
-          onChange(e.target.checked ? grantEmailConsent(person, todayISO()) : { ...person, emailConsent: null })
-        }
-      />
-      Einverständnis E-Mail-Beleg (Adresse speichern, Belege per E-Mail)
-    </label>
-  );
-}
-
 function FieldGroup({ label, children }) {
   return (
     <div style={{ marginBottom: 20 }}>
@@ -3732,6 +3727,24 @@ function ConfirmDeleteButton({ onConfirm, label = "Löschen" }) {
 }
 
 const styles = {
+  navSection: { fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#A3A6AB", padding: "18px 10px 6px" },
+  saveBar: {
+    position: "sticky",
+    bottom: 0,
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 28,
+    padding: "12px 0",
+    background: "#FAFAF8",
+    borderTop: "1px solid #E4E5E7",
+    maxWidth: 420,
+  },
+  setupBox: { display: "grid", gap: 6, border: "1px solid #F3D9C4", background: "#FDF8F3", padding: "12px 14px", marginBottom: 20, fontSize: 13, maxWidth: 480 },
+  setupItem: { background: "transparent", border: "none", padding: 0, textAlign: "left", cursor: "pointer", color: "#8A4B12", fontSize: 13 },
+  saleScanBox: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: 10, border: "1px dashed #CBCED2", background: "#fff" },
+  scanError: { fontSize: 12, color: "#B5480C", marginTop: 6 },
+  scanOk: { fontSize: 12, color: "#1D7A3C", marginTop: 6 },
   loadingWrap: { display: "flex", justifyContent: "center", alignItems: "center", height: 200 },
   persistErrorBanner: {
     position: "fixed",

@@ -79,8 +79,18 @@ function formatAmount(amount) {
   return num.toFixed(2);
 }
 
-function line(value) {
-  return (value || "").toString().trim();
+function line(value, max = 70) {
+  return (value || "").toString().replace(/[\r\n]+/g, " ").trim().slice(0, max);
+}
+
+// QR-IBAN (Institut-Identifikation 30000–31999) verlangt eine QR-Referenz
+// (QRR). Qwui erzeugt eine Kreditorreferenz (SCOR) — mit einer QR-IBAN lehnt
+// die Bank die Zahlung ab. Deshalb nur normale IBAN.
+export function isQrIban(iban) {
+  const clean = cleanIban(iban);
+  if (!/^(CH|LI)\d{7}/.test(clean)) return false;
+  const iid = Number(clean.slice(4, 9));
+  return iid >= 30000 && iid <= 31999;
 }
 
 /**
@@ -109,12 +119,12 @@ export function buildSwissQrPayload({
   const creditorLines = [
     cleanedIban,
     "S",
-    line(creditor.name),
-    line(creditor.street),
-    line(creditor.houseNumber),
-    line(creditor.postalCode),
-    line(creditor.city),
-    line(creditor.country || "CH"),
+    line(creditor.name, 70),
+    line(creditor.street, 70),
+    line(creditor.houseNumber, 16),
+    line(creditor.postalCode, 16),
+    line(creditor.city, 35),
+    line(creditor.country || "CH", 2),
   ];
 
   const ultimateCreditorLines = ["", "", "", "", "", "", ""]; // reserviert, nicht verwenden
@@ -123,12 +133,12 @@ export function buildSwissQrPayload({
   const debtorLines = hasDebtor
     ? [
         "S",
-        line(debtor.name),
-        line(debtor.street),
-        line(debtor.houseNumber),
-        line(debtor.postalCode),
-        line(debtor.city),
-        line(debtor.country || "CH"),
+        line(debtor.name, 70),
+        line(debtor.street, 70),
+        line(debtor.houseNumber, 16),
+        line(debtor.postalCode, 16),
+        line(debtor.city, 35),
+        line(debtor.country || "CH", 2),
       ]
     : ["", "", "", "", "", "", ""];
 
@@ -146,7 +156,7 @@ export function buildSwissQrPayload({
     ...debtorLines,
     referenceType,
     creditorReference,
-    line(message).slice(0, 140),
+    line(message, 140),
     "EPD", // Trailer, Ende der Zahlungsdaten
   ];
 

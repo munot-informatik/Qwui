@@ -6,7 +6,8 @@
 // v3: Version 1.2.0 — die alte App-Hülle würde Quittungen ohne Lagerbuchung
 // erstellen.
 // v4: Version 1.2.1 — Etikettendruck.
-const CACHE_NAME = "quittungs-tool-v4";
+// v5: Version 1.3.0 — neue Seitenleiste, Belege, Verkauf per Scan.
+const CACHE_NAME = "quittungs-tool-v5";
 const ASSETS_TO_CACHE = ["./", "./index.html", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -35,6 +36,28 @@ self.addEventListener("fetch", (event) => {
   // Das widerspricht dem Zweck der zentralen Datenbank.
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(fetch(event.request));
+    return;
+  }
+
+  // Seitenaufrufe zuerst vom Netz: Nach einem Deploy soll sofort die neue
+  // Version laufen, nicht noch einmal die alte aus dem Cache (die dann mit der
+  // alten Logik Daten schreiben würde). Offline greift der Cache.
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200 && !response.redirected && response.type === "basic") {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", clone));
+          }
+          return response;
+        })
+        .catch(async (err) => {
+          const cached = (await caches.match(event.request)) || (await caches.match("./index.html"));
+          if (cached) return cached;
+          throw err;
+        })
+    );
     return;
   }
 

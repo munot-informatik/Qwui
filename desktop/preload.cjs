@@ -59,6 +59,9 @@ contextBridge.exposeInMainWorld("qwuiDesktop", {
     getState: () => ipcRenderer.invoke("api:getState"),
     saveConfig: (config) => ipcRenderer.invoke("api:saveConfig", config),
     regenerateToken: () => ipcRenderer.invoke("api:regenerateToken"),
+    // Erweiterung für Claude Desktop: direkt öffnen bzw. als Datei speichern.
+    installClaude: () => ipcRenderer.invoke("api:installClaude"),
+    saveClaudeExtension: () => ipcRenderer.invoke("api:saveClaudeExtension"),
     listDrafts: () => ipcRenderer.invoke("drafts:list"),
     setDraftStatus: (id, status) => ipcRenderer.invoke("drafts:setStatus", id, status),
     // Meldet neue oder erledigte Entwürfe; liefert eine Abmelde-Funktion.

@@ -1,11 +1,13 @@
 // SMTP-Einstellungen für den direkten E-Mail-Versand (nur Windows-Version,
-// Reiter Firma). Gespeichert wird im Electron-Hauptprozess: die Einstellungen
+// Einstellungen → E-Mail). Für bekannte Anbieter genügen Adresse und Passwort,
+// der Server wird vorausgefüllt (shared/mailPresets.js). Gespeichert wird im Electron-Hauptprozess: die Einstellungen
 // in der lokalen Datenbank, das Passwort verschlüsselt in geheim.bin. Das
 // Passwort kommt nie zurück in die Oberfläche — angezeigt wird nur, ob eines
 // hinterlegt ist.
 
 import React, { useEffect, useState } from "react";
 import { Check, Mail } from "lucide-react";
+import { MAIL_PRESETS, OUTLOOK_NOTE, detectPreset, suggestPreset } from "../shared/mailPresets.js";
 
 const SECURITY_OPTIONS = [
   ["starttls", "STARTTLS (meist Port 587)"],
@@ -24,6 +26,7 @@ export default function EmailEinstellungen() {
   const [testTo, setTestTo] = useState("");
   const [status, setStatus] = useState(null); // { kind: "ok" | "error", text }
   const [busy, setBusy] = useState(false);
+  const [provider, setProvider] = useState(""); // Preset-ID, "other" oder ""
 
   useEffect(() => {
     if (!mail) return;
@@ -31,11 +34,34 @@ export default function EmailEinstellungen() {
       setSettings(s);
       setPasswordSet(p);
       setTestTo(s.fromAddress || "");
+      setProvider(detectPreset(s.host));
     });
   }, []);
 
   if (!mail) return null;
   if (!settings) return null;
+
+  const preset = MAIL_PRESETS.find((p) => p.id === provider) || null;
+
+  function chooseProvider(id) {
+    setProvider(id);
+    const p = MAIL_PRESETS.find((x) => x.id === id);
+    if (p) setSettings((prev) => ({ ...prev, host: p.host, security: p.security, port: p.port }));
+  }
+
+  // Bei bekannten Anbietern ist die Adresse zugleich Benutzername und Absender.
+  function setAddress(value) {
+    setSettings((prev) => ({
+      ...prev,
+      user: value,
+      fromAddress: !prev.fromAddress || prev.fromAddress === prev.user ? value : prev.fromAddress,
+    }));
+    setTestTo((prev) => (!prev || prev === settings.user ? value : prev));
+    if (!provider) {
+      const guess = suggestPreset(value);
+      if (guess && guess !== "outlook") chooseProvider(guess);
+    }
+  }
 
   function update(field, value) {
     setSettings((prev) => {
@@ -87,14 +113,36 @@ export default function EmailEinstellungen() {
   }
 
   return (
-    <div style={{ marginTop: 32, maxWidth: 420 }}>
-      <div style={s.fieldLabel}>E-Mail-Versand (SMTP)</div>
+    <div style={{ maxWidth: 420 }}>
       <div style={s.intro}>
-        Quittungen und Rechnungen gehen direkt aus Qwui an den Kunden, mit der PDF als Anhang.
-        Die Angaben findest du bei deinem E-Mail-Anbieter (Postausgangsserver). Das Passwort wird
-        verschlüsselt auf diesem PC gespeichert.
+        Quittungen und Rechnungen gehen direkt aus Qwui an den Kunden, mit der PDF als Anhang. Das
+        Passwort wird verschlüsselt auf diesem PC gespeichert.
       </div>
       <div style={{ display: "grid", gap: 8 }}>
+        <select value={provider} onChange={(e) => chooseProvider(e.target.value)} style={s.select} aria-label="E-Mail-Anbieter">
+          <option value="">— E-Mail-Anbieter wählen —</option>
+          {MAIL_PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+          <option value="outlook">Outlook.com / Hotmail</option>
+          <option value="other">Anderer Anbieter (Server selbst eintragen)</option>
+        </select>
+        {provider === "outlook" && <div style={s.error}>{OUTLOOK_NOTE}</div>}
+        {preset?.note && <div style={s.note}>{preset.note}</div>}
+        {preset && (
+          <div style={s.serverLine}>
+            Server {settings.host}, {settings.security === "ssl" ? "SSL/TLS" : settings.security === "starttls" ? "STARTTLS" : "ohne Verschlüsselung"}, Port {settings.port}
+          </div>
+        )}
+      </div>
+      {provider && provider !== "outlook" && (
+      <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+        {preset ? (
+          <input placeholder="E-Mail-Adresse" value={settings.user} onChange={(e) => setAddress(e.target.value)} autoComplete="off" aria-label="E-Mail-Adresse" />
+        ) : (
+        <>
         <input placeholder="SMTP-Server, z. B. mail.example.ch" value={settings.host} onChange={(e) => update("host", e.target.value)} />
         <div style={{ display: "flex", gap: 8 }}>
           <select value={settings.security} onChange={(e) => update("security", e.target.value)} style={{ ...s.select, flex: 2 }} aria-label="Verschlüsselung">
@@ -115,6 +163,8 @@ export default function EmailEinstellungen() {
           />
         </div>
         <input placeholder="Benutzer (meist die E-Mail-Adresse)" value={settings.user} onChange={(e) => update("user", e.target.value)} autoComplete="off" />
+        </>
+        )}
         <input
           type="password"
           placeholder={passwordSet ? "Passwort gespeichert — nur zum Ändern eingeben" : "Passwort"}
@@ -133,7 +183,9 @@ export default function EmailEinstellungen() {
           </label>
         )}
         <input placeholder="Absender-Name, z. B. Billard Shop Munot" value={settings.fromName} onChange={(e) => update("fromName", e.target.value)} />
-        <input placeholder="Absender-Adresse" value={settings.fromAddress} onChange={(e) => update("fromAddress", e.target.value)} />
+        {!preset && (
+          <input placeholder="Absender-Adresse" value={settings.fromAddress} onChange={(e) => update("fromAddress", e.target.value)} />
+        )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={save} disabled={busy} style={s.secondaryBtn}>
             <Check size={14} /> Speichern
@@ -147,6 +199,7 @@ export default function EmailEinstellungen() {
         </div>
         {status && <div style={status.kind === "ok" ? s.ok : s.error}>{status.text}</div>}
       </div>
+      )}
     </div>
   );
 }
@@ -170,5 +223,7 @@ const s = {
     width: "fit-content",
   },
   ok: { fontSize: 12, color: "#1D7A3C" },
+  note: { fontSize: 12, color: "#5B5F66", background: "#F1F1EF", padding: "8px 10px" },
+  serverLine: { fontSize: 11, color: "#8B8F96" },
   error: { fontSize: 12, color: "#B5480C", background: "#FDF3EC", padding: "8px 10px" },
 };

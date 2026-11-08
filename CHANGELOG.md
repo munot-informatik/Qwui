@@ -3,6 +3,77 @@
 Alle nennenswerten Änderungen an Qwui. Versionsnummern folgen der Web- und
 Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
 
+## 1.3.0 — 8. November 2026
+
+Einfachere Bedienung.
+
+### Verkauf und Belege
+
+- **Verkauf per Scan:** Feld «Scannen» in der Quittung. Eine Seriennummer trägt
+  Artikel und Exemplar ein, eine Artikelnummer den Artikel (bzw. Menge +1).
+  Verkaufte, retournierte oder doppelt gescannte Stücke werden gemeldet.
+- **Kunde suchen statt aus einer langen Liste wählen** (Name, Telefon, E-Mail;
+  «079 …» findet auch «+41 79 …»). Neue Kunden direkt aus der Quittung anlegen.
+  Ohne Kunde geht die Quittung an «Laufkunde»; die Adressfelder erscheinen nur,
+  wenn sie gebraucht werden.
+- **Kunden bearbeiten und durchsuchen.** Bisher liessen sie sich nur löschen und
+  neu anlegen.
+- **Belege:** «Verlauf» und «Buchhaltung» sind zu einer Seite zusammengelegt —
+  mit Suche über alle Monate (Nummer, Kunde, Artikel, Seriennummer), Öffnen,
+  Bearbeiten, Löschen mit Rückfrage, Zahlungsstatus, Mahnung und Excel-Export.
+
+### Struktur und Einrichtung
+
+- Seitenleiste in Tagesgeschäft (Neue Quittung, Belege, Kunden, Inventar) und
+  Einstellungen (Firma, E-Mail, Shop, Assistent, Backup) geteilt. Offene
+  Vorschläge des Assistenten erscheinen oben als «Vorschläge (n)».
+- Hinweis «Noch einzurichten» auf «Neue Quittung», solange Firmendaten,
+  E-Mail-Versand oder automatische Sicherung fehlen.
+- **E-Mail:** eigene Seite; Anbieter wählen (Bluewin, Hostpoint, Infomaniak,
+  Gmail, GMX), dann genügen Adresse und Passwort. Hinweis, dass Outlook.com
+  keine Passwort-Anmeldung mehr erlaubt.
+- **Firma:** ein einziger Knopf «Firmendaten speichern» statt drei, mit Hinweis
+  auf ungespeicherte Änderungen.
+
+### Fortgeschrittenes
+
+- **Claude Desktop mit einem Klick verbinden:** Qwui erstellt eine
+  Claude-Desktop-Erweiterung (.mcpb) mit Adresse und Token. Node.js und das
+  Bearbeiten der Konfiguration sind nicht mehr nötig.
+- **Inventar:** Artikelzeilen sind nur zur Ansicht und werden nach «Bearbeiten»
+  geändert — kein versehentlich geänderter Preis mehr. «Neuer Artikel» und der
+  Excel-Bereich sind eingeklappt; Inventar und Wareneingang nutzen dasselbe
+  Formular für neue Artikel.
+
+### Behoben
+
+- Eine Artikelnummer liess sich zweimal vergeben (Inventar, Wareneingang,
+  Bearbeiten). Scanner fanden dann nur einen der beiden Artikel. Jetzt wird das
+  abgelehnt bzw. beim Bearbeiten gewarnt.
+- Web-Version auf dem Telefon: Die Seitenleiste nahm die halbe Breite ein und
+  der Inhalt lief rechts aus dem Bild. Unter 760 px Breite steht die
+  Navigation jetzt als Leiste oben.
+- **Web-Version mit zwei Geräten oder Fenstern:** Speicherte das zweite,
+  überschrieb es die Quittungen des ersten — die Quittung des ersten Geräts war
+  weg und ihre Nummer wurde doppelt vergeben. Jetzt hat jeder gespeicherte Wert
+  eine Version; wer mit einem veralteten Stand speichert, bekommt die Meldung
+  «Die Daten wurden inzwischen … geändert» mit **Neu laden**, statt fremde
+  Daten zu überschreiben.
+- **Web-Version, viele Quittungen:** Cloudflare D1 nimmt pro Wert höchstens
+  2 MB an, alle Quittungen stehen in einem Wert — nach etwa 1500–3000
+  Quittungen wäre das Speichern gescheitert. Grosse Werte werden jetzt in Teile
+  zerlegt und in einem Schritt gespeichert (getestet mit 7000 Quittungen).
+- **Datum der Quittung:** Zwischen Mitternacht und 01:00 (Sommer 02:00) stand
+  das Datum von gestern darauf (UTC statt Schweizer Zeit). Bleibt Qwui über
+  Nacht offen, springt das Datum jetzt auch ohne neue Quittung auf heute.
+- **QR-Rechnung:** Lange Namen oder Orte ergaben einen QR-Code, den
+  Banking-Apps ablehnen. Die Felder werden jetzt auf die Längen des
+  Swiss-QR-Standards gekürzt. Eine QR-IBAN wird erkannt und abgelehnt — Qwui
+  braucht die normale IBAN.
+- **Web-Version nach einem Update:** Die Seite kam beim ersten Aufruf noch aus
+  dem Zwischenspeicher, also in der alten Version. Jetzt zuerst vom Netz,
+  der Zwischenspeicher nur noch offline.
+
 ## 1.2.1 — 8. November 2026
 
 ### Seriennummern aus Fotos (Windows)

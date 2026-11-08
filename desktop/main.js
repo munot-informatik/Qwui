@@ -11,7 +11,8 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { randomUUID, randomBytes } from "node:crypto";
 import { getDataDir, getWorkbookPath, getCompanyPath, getDatabasePath, getSecretsPath } from "./dataDir.js";
 import { readCompany } from "./companyStore.js";
@@ -32,6 +33,7 @@ import { DRAFT_STATUS } from "./shared/drafts.js";
 import { createLocalApi, API_TOKEN_SECRET, DEFAULT_API_PORT } from "./localApi.js";
 import { writeEvaluation } from "./excelExport.js";
 import { recognizeText } from "./ocr.js";
+import { buildMcpb } from "./mcpbExport.js";
 import { extractSerialCandidates } from "./shared/serialOcr.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -556,6 +558,64 @@ if (!gotLock) {
     return apiState();
   });
 
+  // ---- Claude Desktop einrichten ----
+  // Baut die Erweiterung (.mcpb) mit Adresse und Token. «install» öffnet sie
+  // direkt mit Claude Desktop (Doppelklick-Verhalten von Windows), «save»
+  // speichert sie für einen anderen PC-Benutzer oder falls Claude Desktop
+  // die Datei nicht selbst öffnet.
+  function claudeExtension() {
+    const state = apiState();
+    if (!state.config.enabled || !state.token) return { error: "Zuerst die lokale Schnittstelle einschalten und speichern." };
+    const serverPath = join(__dirname, "mcp-server.mjs");
+    if (!existsSync(serverPath)) return { error: "Der Assistent-Server fehlt in diesem Programm (mcp-server.mjs)." };
+    const iconPath = join(__dirname, "mcp-icon.png");
+    const buffer = buildMcpb({
+      version: app.getVersion(),
+      port: state.config.port,
+      token: state.token,
+      serverCode: readFileSync(serverPath),
+      icon: existsSync(iconPath) ? readFileSync(iconPath) : null,
+    });
+    return { buffer };
+  }
+
+  ipcMain.handle("api:installClaude", async () => {
+    const ext = claudeExtension();
+    if (ext.error) return { ok: false, error: ext.error };
+    const file = join(tmpdir(), "Qwui-Assistent.mcpb");
+    writeFileSync(file, ext.buffer);
+    const problem = await shell.openPath(file);
+    // Die Datei enthält das Token: nach dem Installieren nicht liegen lassen.
+    // Claude Desktop liest sie beim Öffnen des Installationsfensters ein.
+    setTimeout(() => {
+      try {
+        unlinkSync(file);
+      } catch {
+        // schon weg oder noch geöffnet — beim nächsten Mal wird sie überschrieben
+      }
+    }, 10 * 60 * 1000).unref?.();
+    if (problem) {
+      return {
+        ok: false,
+        error: "Claude Desktop hat die Erweiterung nicht geöffnet. Ist Claude Desktop installiert? Sonst «Datei speichern» wählen und die Datei in Claude Desktop unter Einstellungen → Erweiterungen installieren.",
+      };
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle("api:saveClaudeExtension", async () => {
+    const ext = claudeExtension();
+    if (ext.error) return { ok: false, error: ext.error };
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Erweiterung für Claude Desktop speichern",
+      defaultPath: "Qwui-Assistent.mcpb",
+      filters: [{ name: "Claude-Desktop-Erweiterung", extensions: ["mcpb"] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    writeFileSync(result.filePath, ext.buffer);
+    return { ok: true, path: result.filePath };
+  });
+
   ipcMain.handle("drafts:list", async () => readDrafts());
 
   // Nur offene Entwürfe lassen sich übernehmen oder verwerfen — ein zweites
@@ -578,7 +638,8 @@ if (!gotLock) {
   // Nur noch zum Ansehen und Weitergeben; die Daten selbst liegen in qwui.db.
 
   async function exportEvaluation() {
-    const today = new Date().toISOString().slice(0, 10);
+    const n = new Date();
+    const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "Excel-Auswertung speichern",
       defaultPath: join(getDataDir(), `Qwui-Auswertung_${today}.xlsx`),

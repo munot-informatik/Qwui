@@ -9,6 +9,8 @@
 // Braucht ein D1-Datenbank-Binding namens "DB" im Cloudflare-Dashboard
 // (Pages-Projekt -> Settings -> Functions -> D1 database bindings).
 
+import { validateEntries, writeResponse } from "./storage-batch.js";
+
 function fullKey(key, shared) {
   return `${shared === "true" || shared === true ? "shared" : "personal"}:${key}`;
 }
@@ -25,7 +27,7 @@ function fullKey(key, shared) {
 // Ab ein paar Dutzend Quittungen läuft der Wert damit in das Limit von D1.
 // Die Desktop-Version umgeht das bereits (desktop/logoCache.js lagert Logos
 // in Dateien aus); die Web-Version braucht denselben Schritt.
-const MAX_VALUE_BYTES = 16 * 1024 * 1024;
+// Die Grenze selbst steht in storage-batch.js (validateEntries).
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -45,13 +47,14 @@ export async function onRequestGet(context) {
   }
 
   try {
-    const row = await env.DB.prepare("SELECT value FROM kv_store WHERE full_key = ?")
+    const row = await env.DB.prepare("SELECT value, updated_at FROM kv_store WHERE full_key = ?")
       .bind(fullKey(key, shared))
       .first();
 
     if (!row) return json(null);
 
-    return json({ key, value: row.value, shared });
+    // version: zum Schutz vor gleichzeitigen Geräten (siehe storage-batch.js).
+    return json({ key, value: row.value, shared, version: row.updated_at });
   } catch (e) {
     // Ohne diesen Fang liefert ein D1-Ausfall eine undurchsichtige 500 ohne
     // JSON-Körper — die App zeigt dann nur "storage.get fehlgeschlagen: 500".
@@ -68,35 +71,13 @@ export async function onRequestPost(context) {
   } catch (e) {
     return json({ error: "Ungültiges JSON im Request-Body" }, 400);
   }
-  const { key, value, shared } = body;
-
-  if (typeof key !== "string" || !key) {
-    return json({ error: "key fehlt" }, 400);
-  }
-  // Die Spalte ist als TEXT NOT NULL deklariert: null oder ein Objekt liesse
-  // den D1-Aufruf mit einer nichtssagenden 500 auflaufen statt mit einer
-  // verständlichen 400.
-  if (typeof value !== "string") {
-    return json({ error: "value muss ein String sein" }, 400);
-  }
-  if (new TextEncoder().encode(value).length > MAX_VALUE_BYTES) {
-    return json({ error: "value ist zu gross" }, 413);
-  }
-
-  try {
-    await env.DB.prepare(
-      `INSERT INTO kv_store (full_key, value, updated_at)
-       VALUES (?, ?, datetime('now'))
-       ON CONFLICT(full_key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
-    )
-      .bind(fullKey(key, shared), value)
-      .run();
-  } catch (e) {
-    console.error("D1-Schreibzugriff fehlgeschlagen", e);
-    return json({ error: "Speichern in der Datenbank fehlgeschlagen" }, 503);
-  }
-
-  return json({ key, value, shared: !!shared });
+  const { key, value, shared, expected } = body || {};
+  // Gleiche Prüfungen und gleicher Schreibweg wie der Batch — inklusive
+  // Versionsprüfung gegen gleichzeitige Geräte.
+  const entries = [{ key, value, shared, expected }];
+  const invalid = validateEntries(entries);
+  if (invalid) return invalid;
+  return writeResponse(env.DB, entries);
 }
 
 export async function onRequestDelete(context) {

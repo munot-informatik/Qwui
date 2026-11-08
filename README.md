@@ -53,10 +53,18 @@ eingerichtete, live erreichbare App" durch.
 - **Lager und Seriennummern**: Bestand pro Artikel, Einzelstücke mit
   Seriennummer, Wareneingang per Barcode-Scanner, Protokoll aller
   Lagerbewegungen, Garantie-Suche nach Seriennummer (Abschnitt 17).
-- **Verlauf & Bearbeiten**: Alle Quittungen einsehen, bearbeiten, löschen.
-- **Buchhaltung**: Monats-/Jahresübersicht, offene/bezahlte Beträge, Excel-Export.
+- **Verkauf per Scan**: Seriennummer oder Artikelnummer scannen, Qwui trägt
+  Artikel und Exemplar in die Quittung ein. Ohne Kunde geht die Quittung an
+  «Laufkunde».
+- **Belege**: Alle Quittungen und Rechnungen an einem Ort — suchen (Nummer,
+  Kunde, Artikel, Seriennummer), öffnen, bearbeiten, löschen, offene/bezahlte
+  Beträge, Mahnung, Excel-Export.
 - **Zentrale Datenbank**: Alle Daten liegen in Cloudflare D1 — jedes Gerät sieht nach
-  dem Login denselben, aktuellen Stand.
+  dem Login denselben, aktuellen Stand. Sind zwei Geräte oder Fenster offen,
+  kann keines die Änderungen des anderen überschreiben: Wer mit einem
+  veralteten Stand speichert, bekommt eine Meldung mit **Neu laden**. Grosse
+  Werte (z. B. tausende Quittungen) legt Qwui in Teilen ab, weil D1 pro Wert
+  höchstens 2 MB annimmt.
 - **Backup & Datenübertragung**: Ein Klick exportiert Firma, alle Kunden und alle
   Quittungen/Rechnungen als eine einzelne JSON-Datei — für Backups im eigenen
   Cloud-Speicher oder zur Übertragung zwischen Web- und Windows-Version (siehe
@@ -104,7 +112,8 @@ npm run preview    # Baut nicht neu, zeigt nur dist/ lokal an
 index.html                     Einstiegspunkt (Vite)
 src/                            React-App (UI, Logik)
   App.jsx                       Hauptkomponente: alle Tabs, Formulare, Vorschau
-  BuchhaltungTab.jsx             Buchhaltungs-Übersicht + Excel-Export
+  BuchhaltungTab.jsx             Seite «Belege»: Suche, Zahlungen, Mahnung, Excel-Export
+  Kunden.jsx                     Kundensuche in der Quittung, Kundenliste mit Bearbeiten
   Lager.jsx                      Wareneingang, Exemplare, Seriennummer-Suche, Lagerbewegungen
   EmailEinstellungen.jsx         SMTP-Einstellungen (nur Windows)
   BackupAutomatik.jsx            Automatische Sicherung (nur Windows)
@@ -240,28 +249,39 @@ Nach dem Login (Passwort aus Schritt 8) einmalig:
 2. Falls QR-Rechnungen gewünscht: im selben Tab unter "QR-Rechnung" die
    Zahlungsempfänger-Adresse und die IBAN eintragen (Validierung erfolgt live,
    grüner Haken = gültige Schweizer/Liechtensteiner IBAN).
-3. **Kunden** (optional vorab) → Kunden mit Adresse anlegen, damit sie später in der
-   Quittung per Dropdown auswählbar sind. Alternativ kann pro Quittung auch ein
-   Kunde manuell eingetragen werden.
+3. **Kunden** (optional vorab) → **Neuer Kunde**. In der Quittung lässt sich ein
+   Kunde auch direkt neu anlegen. Bestehende Kunden lassen sich suchen und
+   **bearbeiten**; bestehende Quittungen behalten die Angaben von damals.
+
+Oben auf **Neue Quittung** zeigt Qwui, was noch fehlt (Firmendaten, unter
+Windows E-Mail-Versand und automatische Sicherung). Der Hinweis verschwindet,
+sobald alles eingerichtet ist, oder mit **Ausblenden**.
 
 **Eine Quittung erstellen:**
 
-1. Tab **Neue Quittung** → Datum, Empfänger (gespeicherten Kunden wählen oder manuell
-   eintragen), eine oder mehrere Positionen mit Betrag.
-2. Optional **Mehrwertsteuerpflichtig** aktivieren (Normalsatz 8.1 %) — Netto/MWST/
+1. Tab **Neue Quittung** → **Kunde suchen** (Name, Telefon oder E-Mail, Enter
+   übernimmt den ersten Treffer) oder **Neuer Kunde / Adresse eingeben**. Ohne
+   Kunde geht die Quittung an «Laufkunde» — erlaubt bis CHF 400.
+2. Artikel ins Feld **Scannen** scannen: Seriennummer (Etikett am Stück) trägt
+   Artikel und Exemplar ein, Artikelnummer trägt den Artikel ein bzw. zählt die
+   Menge hoch. Bei Artikeln mit Seriennummer danach das Etikett scannen oder das
+   Exemplar wählen. Dienstleistungen und Artikel ohne Barcode wie bisher über
+   die Positionen.
+3. Optional **Mehrwertsteuerpflichtig** aktivieren (Normalsatz 8.1 %) — Netto/MWST/
    Total werden automatisch ausgerechnet.
-3. Optional **Bezahlbar per Rechnung (QR-Einzahlungsschein)** aktivieren (setzt eine
+4. Optional **Bezahlbar per Rechnung (QR-Einzahlungsschein)** aktivieren (setzt eine
    gültige IBAN unter Firma voraus). Ist diese Option aktiv, heisst das Dokument
    auf Bildschirm, PDF und Druck **"RECHNUNG"** statt **"QUITTUNG"** — schliesslich
    ist der Betrag noch nicht bezahlt, sondern erst fällig.
-4. Ab CHF 400 Total ist laut OR Art. 958f die Adresse des Käufers gesetzlich
+5. Ab CHF 400 Total ist laut OR Art. 958f die Adresse des Käufers gesetzlich
    vorgeschrieben — die App weist darauf hin, wenn sie fehlt.
-5. **Quittung erstellen →** — Nummer wird automatisch fortlaufend vergeben.
+6. **Quittung erstellen →** — Nummer wird automatisch fortlaufend vergeben.
 
-**Verlauf & Buchhaltung:**
+**Belege** (bis 1.2 getrennt als «Verlauf» und «Buchhaltung»):
 
-- Tab **Verlauf**: alle Quittungen öffnen, bearbeiten oder löschen.
-- Tab **Buchhaltung**: nach Monat/Jahr filtern, offene vs. bezahlte QR-Rechnungen
+- Suchfeld: Nummer, Kunde, Artikel oder Seriennummer — sucht über alle Monate.
+- Jeder Beleg lässt sich **öffnen**, **bearbeiten** oder **löschen** (mit Rückfrage).
+- Nach Monat/Jahr filtern, offene vs. bezahlte QR-Rechnungen
   markieren, Summen einsehen, per Button **Export zu Excel** als `.xlsx`
   herunterladen. Offene QR-Rechnungen, deren 30-Tage-Zahlungsfrist abgelaufen ist,
   werden farblich hervorgehoben (inkl. Anzahl überfälliger Tage); für diese steht
@@ -584,10 +604,13 @@ Bricht das Speichern ab, bleibt alles beim alten Stand.
 Die Windows-Version verschickt Quittungen und Rechnungen direkt per SMTP, die
 PDF hängt automatisch an.
 
-**Einrichten:** **Firma → E-Mail-Versand (SMTP)**: Server, Verschlüsselung
-(STARTTLS meist Port 587, SSL/TLS meist Port 465), Benutzer, Passwort, Absender.
-Die Angaben stehen beim E-Mail-Anbieter unter "Postausgangsserver". **Test-Mail
-senden** prüft die Einstellungen sofort. Das Passwort liegt verschlüsselt in
+**Einrichten:** **Einstellungen → E-Mail**: Anbieter wählen (Bluewin, Hostpoint,
+Infomaniak, Gmail, GMX), dann genügen E-Mail-Adresse, Passwort und
+Absender-Name — der Server ist vorausgefüllt. Gmail verlangt ein App-Passwort.
+Outlook.com/Hotmail lässt seit 2024 keine Anmeldung mit Passwort mehr zu und
+funktioniert deshalb nicht. Bei **Anderer Anbieter** Server, Verschlüsselung
+(STARTTLS meist Port 587, SSL/TLS meist Port 465) und Benutzer selbst eintragen.
+**Test-Mail senden** prüft die Einstellungen sofort. Das Passwort liegt verschlüsselt in
 `geheim.bin` und wird in der App nie wieder angezeigt.
 
 **Versenden:** Beim Erstellen einer Quittung unter **Nach dem Erstellen** «Per
@@ -595,7 +618,7 @@ E-Mail senden» und/oder «Drucken» wählen — E-Mail ist vorgewählt, sobald 
 Adresse bekannt ist. Bei gespeicherten Kunden gilt das nur mit Einverständnis;
 ohne lässt sich der Versand von Hand anhaken. In der Vorschau verschickt **Per E-Mail
 senden** jederzeit erneut. Ob der Versand geklappt hat (oder mit welcher
-Meldung er scheiterte), steht an der Quittung und im Verlauf.
+Meldung er scheiterte), steht an der Quittung und unter Belege.
 
 **Einverständnis «E-Mail-Beleg»:** Beim Kunden lässt sich das Einverständnis
 mit Datum erfassen. Ohne Einverständnis wird die E-Mail-Adresse **nicht
@@ -639,7 +662,7 @@ exportieren».
 
 ## 20. Shop-Anbindung (Windows)
 
-Reiter **Shop-Anbindung:** Nach jeder Lagerbewegung und Preisänderung geht ein
+**Einstellungen → Shop:** Nach jeder Lagerbewegung und Preisänderung geht ein
 Shop-Feed hinaus — pro Artikel Artikelnummer, Name, Produktgruppe, Preis,
 verfügbare Menge und Status (verfügbar/ausverkauft). **Seriennummern und
 Einkaufspreise sind nie enthalten.**
@@ -670,8 +693,8 @@ damit. Claude Desktop muss dafür auf demselben PC laufen.
 `artikel_vorschlagen`, `backup_status`.
 
 - **Nur Entwürfe:** Wareneingänge und neue Artikel aus Claude erscheinen in
-  Qwui unter **Assistent → Vorschläge des Assistenten** und werden erst mit
-  **Übernehmen** gebucht (Lagerbewegungen mit Quelle «Assistent»).
+  Qwui unter **Vorschläge** (erscheint in der Seitenleiste, sobald etwas offen
+  ist) und werden erst mit **Übernehmen** gebucht (Lagerbewegungen mit Quelle «Assistent»).
 - **Datenschutz:** Der Assistent bekommt keine Namen, Adressen, E-Mails oder
   Telefonnummern, nur Kunden-IDs; die Zuordnung macht der Laden in Qwui.
   Geschäftszahlen wie Bestand und Umsatz gehen aber an Claude und damit an
@@ -681,36 +704,39 @@ damit. Claude Desktop muss dafür auf demselben PC laufen.
 
 **Einrichten (einmalig):**
 
-1. [Node.js](https://nodejs.org) (LTS) installieren.
-2. Den Ordner `mcp/` aus diesem Repository auf den PC kopieren und darin
-   einmal ausführen:
+1. In Qwui **Einstellungen → Assistent → Lokale Schnittstelle einschalten →
+   Speichern**. Qwui erzeugt ein Zugriffstoken.
+2. **In Claude Desktop installieren** klicken. Claude Desktop öffnet die
+   Qwui-Erweiterung; **Installieren** bestätigen — Adresse und Token sind schon
+   eingetragen. Node.js ist nicht nötig, Claude Desktop bringt es mit.
+   Öffnet sich Claude Desktop nicht, **Datei speichern** und die `.mcpb`-Datei
+   per Doppelklick oder unter **Einstellungen → Erweiterungen** installieren.
+3. Probe in Claude: «Wie viele Predator-Queues haben wir an Lager?»
 
-   ```bash
-   npm install
-   ```
+Die Erweiterung ist nicht signiert; Claude Desktop weist beim Installieren
+darauf hin. Nach **Erneuern** des Tokens oder einem anderen Port die
+Erweiterung neu installieren. Die Datei im Temp-Ordner löscht Qwui nach zehn
+Minuten wieder, weil sie das Token enthält.
 
-3. In Qwui **Assistent → Lokale Schnittstelle einschalten → Speichern**. Qwui
-   erzeugt ein Zugriffstoken und zeigt den fertigen Eintrag für Claude Desktop.
-4. In Claude Desktop **Einstellungen → Entwickler → Konfiguration bearbeiten**
-   und den Eintrag einfügen, mit dem richtigen Pfad zu `server.js`:
+**Manuell (für Fortgeschrittene, mit Node.js):** Ordner `mcp/` kopieren, darin
+`npm install`, dann in Claude Desktop unter **Einstellungen → Entwickler →
+Konfiguration bearbeiten** den Eintrag einfügen, den Qwui unter «Manuell
+einrichten» anzeigt:
 
-   ```json
-   {
-     "mcpServers": {
-       "qwui": {
-         "command": "node",
-         "args": ["C:\\Qwui\\mcp\\server.js"],
-         "env": {
-           "QWUI_API_URL": "http://127.0.0.1:47110",
-           "QWUI_API_TOKEN": "<Token aus Qwui>"
-         }
-       }
-     }
-   }
-   ```
-
-5. Claude Desktop neu starten. Probe: «Wie viele Predator-Queues haben wir an
-   Lager?»
+```json
+{
+  "mcpServers": {
+    "qwui": {
+      "command": "node",
+      "args": ["C:\\Qwui\\mcp\\server.js"],
+      "env": {
+        "QWUI_API_URL": "http://127.0.0.1:47110",
+        "QWUI_API_TOKEN": "<Token aus Qwui>"
+      }
+    }
+  }
+}
+```
 
 **Sicherheit:** Die Schnittstelle ist standardmässig aus und lauscht nur auf
 `127.0.0.1`. Ohne gültiges Token, aus einem Browser (Origin-Header) oder unter
