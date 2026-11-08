@@ -3,7 +3,7 @@
 Alle nennenswerten Änderungen an Qwui. Versionsnummern folgen der Web- und
 Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
 
-## Unveröffentlicht
+## 1.2.1 — 8. November 2026
 
 ### Seriennummern aus Fotos (Windows)
 

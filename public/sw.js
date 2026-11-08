@@ -5,7 +5,8 @@
 // v2: lokale Schriften unter /fonts statt Google Fonts.
 // v3: Version 1.2.0 — die alte App-Hülle würde Quittungen ohne Lagerbuchung
 // erstellen.
-const CACHE_NAME = "quittungs-tool-v3";
+// v4: Version 1.2.1 — Etikettendruck.
+const CACHE_NAME = "quittungs-tool-v4";
 const ASSETS_TO_CACHE = ["./", "./index.html", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
