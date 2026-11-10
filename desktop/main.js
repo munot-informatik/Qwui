@@ -29,7 +29,8 @@ import { buildBackupPayload } from "./shared/backupFormat.js";
 import { buildShopFeed, shopFeedCsv, feedFingerprint } from "./shared/shopFeed.js";
 import { createShopSync, emptyShopConfig, validateWebhookUrl, SHOP_WEBHOOK_TOKEN_SECRET } from "./shopSync.js";
 import { runAssistantTool, TOOL_NAMES } from "./shared/assistantTools.js";
-import { DRAFT_STATUS } from "./shared/drafts.js";
+import { DRAFT_STATUS, DRAFT_TYPE } from "./shared/drafts.js";
+import { createOrderImport, shopBaseUrl, ORDER_POLL_MS } from "./shopOrders.js";
 import { createLocalApi, API_TOKEN_SECRET, DEFAULT_API_PORT } from "./localApi.js";
 import { writeEvaluation } from "./excelExport.js";
 import { recognizeText } from "./ocr.js";
@@ -376,7 +377,10 @@ if (!gotLock) {
 
   const SHOP_CONFIG_META = "shop-config";
   const SHOP_STATUS_META = "shop-status";
+  const SHOP_ORDERS_STATUS_META = "shop-orders-status";
+  const SHOP_ORDERS_QUEUE_META = "shop-orders-queue";
   let shopSync = null;
+  let orderImport = null;
 
   function readShopConfig() {
     return { ...emptyShopConfig, ...(store.getMeta(SHOP_CONFIG_META) || {}) };
@@ -397,6 +401,8 @@ if (!gotLock) {
       config: readShopConfig(),
       tokenSet: secrets.has(SHOP_WEBHOOK_TOKEN_SECRET),
       status: store.getMeta(SHOP_STATUS_META) || {},
+      orders: store.getMeta(SHOP_ORDERS_STATUS_META) || null,
+      ordersPossible: !!shopBaseUrl(readShopConfig().webhookUrl),
       // Vorschau für die App: genau das, was der Shop bekommt.
       feed,
     };
@@ -411,11 +417,15 @@ if (!gotLock) {
       fileDir: String(config?.fileDir || ""),
       webhookEnabled: !!config?.webhookEnabled,
       webhookUrl: String(config?.webhookUrl || "").trim(),
+      ordersEnabled: !!config?.ordersEnabled,
     };
     if (next.fileEnabled && !next.fileDir) return { ok: false, error: "Bitte einen Ordner für den Datei-Feed wählen." };
     if (next.webhookEnabled) {
       const problem = validateWebhookUrl(next.webhookUrl);
       if (problem) return { ok: false, error: problem };
+    }
+    if (next.ordersEnabled && !(next.webhookEnabled && shopBaseUrl(next.webhookUrl))) {
+      return { ok: false, error: "Bestellungen abholen geht nur mit dem Qwui-Shop: Die Webhook-Adresse muss auf /api/qwui/feed enden." };
     }
     store.setMeta(SHOP_CONFIG_META, next);
     if (token === "") secrets.delete(SHOP_WEBHOOK_TOKEN_SECRET);
@@ -423,6 +433,7 @@ if (!gotLock) {
     // Neue oder geänderte Ziele gleich beliefern, nicht erst bei der
     // nächsten Lagerbewegung (gebündelt, blockiert das Speichern nicht).
     shopSync.trigger();
+    orderImport.poll().catch(() => {});
     return { ok: true, ...(await shopState()) };
   });
 
@@ -436,6 +447,7 @@ if (!gotLock) {
 
   ipcMain.handle("shop:syncNow", async () => {
     await shopSync.syncNow();
+    await orderImport.poll();
     return shopState();
   });
 
@@ -450,6 +462,21 @@ if (!gotLock) {
     // Beim Start nachholen, was offen ist: Wiederholungen leben nur im Speicher,
     // ein vor dem Schliessen gescheiterter Abgleich ginge sonst vergessen.
     shopSync.trigger();
+
+    // Bestellungen aus dem Qwui-Shop: jede Minute nachsehen.
+    orderImport = createOrderImport({
+      getConfig: readShopConfig,
+      getToken: () => secrets.get(SHOP_WEBHOOK_TOKEN_SECRET),
+      readDrafts,
+      addDraft,
+      readQueue: () => store.getMeta(SHOP_ORDERS_QUEUE_META) || [],
+      writeQueue: (queue) => store.setMeta(SHOP_ORDERS_QUEUE_META, queue),
+      readStatus: () => store.getMeta(SHOP_ORDERS_STATUS_META),
+      writeStatus: (status) => store.setMeta(SHOP_ORDERS_STATUS_META, status),
+      newId: () => randomUUID().slice(0, 8),
+    });
+    setTimeout(() => orderImport.poll().catch(() => {}), 5 * 1000);
+    setInterval(() => orderImport.poll().catch(() => {}), ORDER_POLL_MS);
   }
 
   // ---- Lokale Schnittstelle für den Assistenten (nur Desktop) ----
@@ -484,6 +511,15 @@ if (!gotLock) {
 
   function notifyDraftsChanged() {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("drafts:changed");
+  }
+
+  // Höchstens 200 Entwürfe behalten; die ältesten erledigten fallen weg.
+  async function addDraft(draft) {
+    const drafts = [...readDrafts(), draft];
+    const open = drafts.filter((d) => d.status === DRAFT_STATUS.open);
+    const done = drafts.filter((d) => d.status !== DRAFT_STATUS.open);
+    store.setMeta(DRAFTS_META, [...done.slice(-Math.max(0, 200 - open.length)), ...open]);
+    notifyDraftsChanged();
   }
 
   // Für Assistent und Excel-Auswertung: ohne Logos (store.getRaw), die
@@ -620,17 +656,30 @@ if (!gotLock) {
 
   // Nur offene Entwürfe lassen sich übernehmen oder verwerfen — ein zweites
   // «Übernehmen» desselben Entwurfs bucht nichts doppelt.
-  ipcMain.handle("drafts:setStatus", async (_event, id, status) => {
+  // extra.bookedAt: bei Shop-Bestellungen der Zeitpunkt der Quittung (Lagerbuchung).
+  ipcMain.handle("drafts:setStatus", async (_event, id, status, extra) => {
     if (![DRAFT_STATUS.accepted, DRAFT_STATUS.rejected].includes(status)) return { ok: false, error: "Unbekannter Status." };
     const drafts = readDrafts();
     const draft = drafts.find((d) => d.id === id);
     if (!draft) return { ok: false, error: "Entwurf nicht gefunden." };
     if (draft.status !== DRAFT_STATUS.open) return { ok: false, error: `Entwurf ist bereits ${draft.status}.` };
+    const decidedAt = new Date().toISOString();
+    const bookedAt = typeof extra?.bookedAt === "string" && !Number.isNaN(new Date(extra.bookedAt).getTime()) ? extra.bookedAt : decidedAt;
+    const isOrder = draft.type === DRAFT_TYPE.order;
     store.setMeta(
       DRAFTS_META,
-      drafts.map((d) => (d.id === id ? { ...d, status, decidedAt: new Date().toISOString() } : d))
+      drafts.map((d) =>
+        d.id === id ? { ...d, status, decidedAt, ...(isOrder && status === DRAFT_STATUS.accepted ? { bookedAt } : {}) } : d
+      )
     );
     notifyDraftsChanged();
+    // Dem Shop melden, damit er die zurückgehaltene Ware freigibt bzw. weiss,
+    // dass der Bestand im nächsten Feed die Bestellung schon enthält.
+    if (isOrder && orderImport) {
+      orderImport
+        .report(draft.payload.orderId, status === DRAFT_STATUS.accepted ? "gebucht" : "verworfen", status === DRAFT_STATUS.accepted ? bookedAt : null)
+        .catch(() => {});
+    }
     return { ok: true };
   });
 
@@ -706,14 +755,7 @@ if (!gotLock) {
       runTool: (name, args) =>
         runAssistantTool(name, args, {
           readData: readAssistantData,
-          addDraft: async (draft) => {
-            // Höchstens 200 Entwürfe behalten; die ältesten erledigten fallen weg.
-            const drafts = [...readDrafts(), draft];
-            const open = drafts.filter((d) => d.status === DRAFT_STATUS.open);
-            const done = drafts.filter((d) => d.status !== DRAFT_STATUS.open);
-            store.setMeta(DRAFTS_META, [...done.slice(-Math.max(0, 200 - open.length)), ...open]);
-            notifyDraftsChanged();
-          },
+          addDraft,
           getBackupStatus: backupStatusForAssistant,
           now: () => new Date(),
           newId: () => randomUUID().slice(0, 8),

@@ -46,6 +46,48 @@ function claudeConfig(port, token) {
 }
 
 // drafts: alle Entwürfe; onAccept(draft) bucht und liefert Fehlermeldungen (leer = ok).
+const DRAFT_TITLE = { wareneingang: "Wareneingang", artikel: "Neuer Artikel", bestellung: "Online-Bestellung" };
+
+function orderAddress(c) {
+  return [[c.street, c.houseNumber].filter(Boolean).join(" "), [c.postalCode, c.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+}
+
+function OrderDetails({ payload: p }) {
+  const method = { twint: "TWINT", card: "Karte" }[p.paymentMethod] || p.paymentMethod || "online";
+  return (
+    <div style={s.grid}>
+      <span style={s.muted}>Kunde</span>
+      <span>
+        {p.customer.name}
+        {p.customer.email ? ` · ${p.customer.email}` : ""}
+        {p.customer.phone ? ` · ${p.customer.phone}` : ""}
+      </span>
+      <span style={s.muted}>{p.delivery === "abholung" ? "Lieferung" : "Versand an"}</span>
+      <span>{p.delivery === "abholung" ? "Abholung" : orderAddress(p.customer)}</span>
+      <span style={s.muted}>Artikel</span>
+      <span>
+        {p.items.map((it, i) => (
+          <span key={i} style={{ display: "block" }}>
+            {it.quantity} × {it.name} <span className="mono" style={s.muted}>{it.articleNumber}</span> — CHF {chf(it.price * it.quantity)}
+          </span>
+        ))}
+        {p.shipping > 0 && <span style={{ display: "block" }}>Versand — CHF {chf(p.shipping)}</span>}
+      </span>
+      <span style={s.muted}>Bezahlt</span>
+      <span>
+        CHF {chf(p.total)} mit {method}
+        {p.payment === "testkasse" ? " (Testkasse)" : ""}
+      </span>
+      {p.note && (
+        <>
+          <span style={s.muted}>Bemerkung</span>
+          <span>{p.note}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function Vorschlaege({ drafts, describeArticle, onAccept, onReject }) {
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(null);
@@ -66,19 +108,26 @@ export function Vorschlaege({ drafts, describeArticle, onAccept, onReject }) {
         <div key={d.id} style={s.card}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div>
-              <div style={{ fontWeight: 700 }}>{d.type === "wareneingang" ? "Wareneingang" : "Neuer Artikel"}</div>
-              <div style={s.muted}>vom Assistenten, {formatDateTimeDE(d.createdAt)}</div>
+              <div style={{ fontWeight: 700 }}>
+                {DRAFT_TITLE[d.type] || d.type}
+                {d.type === "bestellung" && d.payload.number ? ` Nr. ${d.payload.number}` : ""}
+              </div>
+              <div style={s.muted}>
+                {d.type === "bestellung" ? "aus dem Online-Shop" : "vom Assistenten"}, {formatDateTimeDE(d.createdAt)}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
               <button type="button" onClick={() => accept(d)} disabled={busy === d.id} style={s.primaryBtn}>
-                <Check size={14} /> {busy === d.id ? "Buche…" : "Übernehmen"}
+                <Check size={14} /> {busy === d.id ? "Buche…" : d.type === "bestellung" ? "Quittung erstellen…" : "Übernehmen"}
               </button>
               <button type="button" onClick={() => onReject(d)} disabled={busy === d.id} style={s.secondaryBtn}>
                 <X size={14} /> Verwerfen
               </button>
             </div>
           </div>
-          {d.type === "wareneingang" ? (
+          {d.type === "bestellung" ? (
+            <OrderDetails payload={d.payload} />
+          ) : d.type === "wareneingang" ? (
             <div style={s.grid}>
               <span style={s.muted}>Artikel</span>
               <span>{describeArticle(d.payload.article)}</span>
@@ -142,7 +191,11 @@ export function Vorschlaege({ drafts, describeArticle, onAccept, onReject }) {
             <div key={d.id} style={s.logRow}>
               <span style={{ width: 150 }}>{formatDateTimeDE(d.decidedAt)}</span>
               <span style={{ flex: 1 }}>
-                {d.type === "wareneingang" ? `Wareneingang ${d.payload.article} (${d.payload.quantity})` : `Artikel ${d.payload.name}`}
+                {d.type === "bestellung"
+                  ? `Online-Bestellung Nr. ${d.payload.number} — ${d.payload.customer.name}`
+                  : d.type === "wareneingang"
+                    ? `Wareneingang ${d.payload.article} (${d.payload.quantity})`
+                    : `Artikel ${d.payload.name}`}
               </span>
               <span style={{ width: 100 }}>{d.status}</span>
             </div>

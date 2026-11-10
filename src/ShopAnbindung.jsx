@@ -146,6 +146,17 @@ export default function ShopAnbindung() {
                 Gespeichertes Token entfernen
               </label>
             )}
+            <label style={s.checkLabel}>
+              <input
+                type="checkbox"
+                checked={!!config.ordersEnabled}
+                onChange={(e) => setConfig({ ...config, ordersEnabled: e.target.checked })}
+              />
+              <strong>Bestellungen abholen</strong> — bezahlte Online-Bestellungen erscheinen unter «Vorschläge»
+            </label>
+            {config.ordersEnabled && !/\/api\/qwui\/feed\/?$/.test(config.webhookUrl.trim()) && (
+              <div style={s.hint}>Nur mit dem Qwui-Shop: Die Webhook-Adresse endet dann auf /api/qwui/feed.</div>
+            )}
           </>
         )}
       </div>
@@ -188,6 +199,21 @@ export default function ShopAnbindung() {
             </div>
           );
         })}
+        {state.config.ordersEnabled && (
+          <div style={s.statusRow}>
+            <span style={{ width: 90, fontWeight: 600 }}>Bestellungen</span>
+            <span style={{ flex: 1 }}>
+              {state.orders?.lastSuccessAt
+                ? `zuletzt abgeholt ${formatDateTimeDE(state.orders.lastSuccessAt)}${state.orders.pending ? ` — ${state.orders.pending} Rückmeldung(en) an den Shop ausstehend` : ""}`
+                : "noch nicht abgeholt"}
+              {state.orders && !state.orders.ok && (
+                <div style={{ color: "#B5480C" }}>
+                  Fehler am {formatDateTimeDE(state.orders.at)}: {state.orders.error} — neuer Versuch in einer Minute
+                </div>
+              )}
+            </span>
+          </div>
+        )}
       </div>
 
       <div style={{ ...s.fieldLabel, marginTop: 28 }}>Vorschau: so sieht der Shop den Bestand</div>
@@ -224,6 +250,7 @@ const s = {
   fieldLabel: { fontSize: 12, fontWeight: 600, color: "#5B5F66", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.03em" },
   section: { display: "grid", gap: 8, padding: "12px 0", borderBottom: "1px solid #EDEEEF", maxWidth: 560 },
   checkLabel: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#16181D" },
+  hint: { fontSize: 12, color: "#B5480C" },
   secondaryBtn: {
     background: "#fff",
     color: "#16181D",

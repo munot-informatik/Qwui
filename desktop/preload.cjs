@@ -63,7 +63,7 @@ contextBridge.exposeInMainWorld("qwuiDesktop", {
     installClaude: () => ipcRenderer.invoke("api:installClaude"),
     saveClaudeExtension: () => ipcRenderer.invoke("api:saveClaudeExtension"),
     listDrafts: () => ipcRenderer.invoke("drafts:list"),
-    setDraftStatus: (id, status) => ipcRenderer.invoke("drafts:setStatus", id, status),
+    setDraftStatus: (id, status, extra) => ipcRenderer.invoke("drafts:setStatus", id, status, extra),
     // Meldet neue oder erledigte Entwürfe; liefert eine Abmelde-Funktion.
     onDraftsChanged: (callback) => {
       const listener = () => callback();

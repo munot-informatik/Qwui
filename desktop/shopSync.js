@@ -27,6 +27,7 @@ export const emptyShopConfig = {
   fileDir: "",
   webhookEnabled: false,
   webhookUrl: "",
+  ordersEnabled: false,
 };
 
 // Nur HTTPS — ausser zum eigenen PC (Test-Shop während der Entwicklung).

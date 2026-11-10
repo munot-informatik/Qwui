@@ -56,6 +56,7 @@ import { normalizeCosts, companyKmRate, DEFAULT_KM_RATE } from "../shared/intern
 import { InterneKosten, costsToForm } from "./InterneKosten.jsx";
 import { Kundenwahl, KundenListe, PersonFields, WALK_IN_NAME } from "./Kunden.jsx";
 import { findArticle } from "../shared/reports.js";
+import { orderToReceiptForm } from "../shared/shopOrders.js";
 
 // Direkter Versand per SMTP und automatische Sicherung gibt es nur in der
 // Windows-Version (Preload).
@@ -326,6 +327,10 @@ export default function ReceiptApp() {
   const [stockWarnings, setStockWarnings] = useState([]);
   const [currentReceipt, setCurrentReceipt] = useState(null);
   const [editingReceiptId, setEditingReceiptId] = useState(null);
+  // Online-Bestellung, aus der die Quittung im Formular gerade entsteht:
+  // { draftId, orderId, number, warnings }. Beim Erstellen wird der Vorschlag
+  // als übernommen markiert und der Shop benachrichtigt.
+  const [pendingOrder, setPendingOrder] = useState(null);
 
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [manualCustomer, setManualCustomer] = useState(emptyPerson);
@@ -955,7 +960,40 @@ export default function ReceiptApp() {
 
   // Bucht einen Entwurf. Ist er (z. B. nach einem Absturz zwischen Buchung
   // und Statuswechsel) schon gebucht, wird er nur noch als übernommen markiert.
+  // Online-Bestellung: öffnet das Quittungsformular, ausgefüllt mit Kunde,
+  // Positionen und Versand. Gebucht wird beim Erstellen der Quittung.
+  function startOrderReceipt(draft) {
+    const form = orderToReceiptForm(draft.payload, {
+      inventory,
+      findArticle,
+      isSerialTracked,
+      makeItem: emptyItem,
+      today: todayISO(),
+    });
+    resetForm();
+    setEditingReceiptId(null);
+    setSelectedCustomerId("");
+    setManualCustomer({ ...emptyPerson, ...form.customer });
+    setItems(form.items.length ? form.items : [emptyItem()]);
+    setNote(form.note);
+    setDeliveryTo(form.deliveryTo);
+    setDeliveryMail(form.deliveryMail);
+    setPendingOrder({ draftId: draft.id, orderId: draft.payload.orderId, number: draft.payload.number, warnings: form.warnings });
+    setMode("form");
+    setTab("new");
+  }
+
   async function acceptDraft(draft) {
+    if (draft.type === "bestellung") {
+      // Schon als Quittung erstellt (z. B. Absturz vor dem Statuswechsel)?
+      const existing = receipts.find((r) => r.shopOrder?.draftId === draft.id);
+      if (existing) {
+        const r = await desktopAssistant.setDraftStatus(draft.id, "übernommen", { bookedAt: existing.createdAt });
+        return r.ok ? [] : [r.error];
+      }
+      startOrderReceipt(draft);
+      return [];
+    }
     if (!draftAlreadyBooked(draft)) {
       if (draft.type === "artikel") {
         const p = draft.payload;
@@ -1408,6 +1446,7 @@ export default function ReceiptApp() {
     setDeliveryPrint(false);
     setSaleScan("");
     setSaleScanMsg(null);
+    setPendingOrder(null);
   }
 
   function getActiveCustomer() {
@@ -1568,6 +1607,7 @@ export default function ReceiptApp() {
       paid: !isQrBill,
       note,
       ...(normalizeCosts(costsForm) ? { internalCosts: normalizeCosts(costsForm) } : {}),
+      ...(pendingOrder ? { shopOrder: { orderId: pendingOrder.orderId, number: pendingOrder.number, draftId: pendingOrder.draftId } } : {}),
       company,
       createdAt: new Date().toISOString(),
     };
@@ -1583,6 +1623,11 @@ export default function ReceiptApp() {
     });
     // Nicht gespeichert: im Formular bleiben, nichts versenden.
     if (!saved) return;
+    if (pendingOrder && desktopAssistant) {
+      // Erst nach dem Speichern: Ohne Quittung bleibt die Bestellung offen.
+      await desktopAssistant.setDraftStatus(pendingOrder.draftId, "übernommen", { bookedAt: receipt.createdAt });
+      setPendingOrder(null);
+    }
     setCurrentReceipt(receipt);
     setMode("preview");
     return receipt;
@@ -2056,6 +2101,28 @@ export default function ReceiptApp() {
                         → {x.label}
                       </button>
                     ))}
+                  </div>
+                )}
+                {pendingOrder && !editingReceiptId && (
+                  <div style={styles.editBanner}>
+                    <span>
+                      Quittung zur Online-Bestellung Nr. <span className="mono">{pendingOrder.number}</span>. «Quittung
+                      erstellen» bucht das Lager und schliesst die Bestellung in den Vorschlägen ab.
+                      {pendingOrder.warnings.map((w, i) => (
+                        <span key={i} style={{ display: "block", marginTop: 4, color: "#B5480C" }}>
+                          {w}
+                        </span>
+                      ))}
+                    </span>
+                    <button
+                      onClick={() => {
+                        resetForm();
+                        setTab("drafts");
+                      }}
+                      style={styles.linkBtn}
+                    >
+                      Abbrechen
+                    </button>
                   </div>
                 )}
                 {editingReceiptId && (
@@ -3027,8 +3094,8 @@ export default function ReceiptApp() {
 
             {tab === "drafts" && desktopAssistant && (
               <div style={styles.panel}>
-                <Eyebrow>Assistent</Eyebrow>
-                <h1 style={styles.h1}>Vorschläge des Assistenten</h1>
+                <Eyebrow>Assistent und Online-Shop</Eyebrow>
+                <h1 style={styles.h1}>Vorschläge</h1>
                 <Vorschlaege drafts={drafts} describeArticle={describeDraftArticle} onAccept={acceptDraft} onReject={rejectDraft} />
               </div>
             )}
@@ -3036,7 +3103,7 @@ export default function ReceiptApp() {
             {tab === "assistant" && desktopAssistant && (
               <div style={styles.panel}>
                 <Eyebrow>Assistent</Eyebrow>
-                <h1 style={styles.h1}>Vorschläge des Assistenten</h1>
+                <h1 style={styles.h1}>Vorschläge</h1>
                 <Vorschlaege drafts={drafts} describeArticle={describeDraftArticle} onAccept={acceptDraft} onReject={rejectDraft} />
                 <h2 style={{ ...styles.h1, fontSize: 20, marginTop: 40 }}>Lokale Schnittstelle</h2>
                 <Schnittstelle />

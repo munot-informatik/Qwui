@@ -3,7 +3,10 @@
 // Sie erscheinen in der App unter «Vorschläge des Assistenten» und werden
 // erst mit «Übernehmen» gebucht — mit der Quelle "Assistent" im Protokoll.
 
-export const DRAFT_TYPE = { goodsIn: "wareneingang", article: "artikel" };
+// «bestellung» kommt nicht vom Assistenten, sondern aus dem Online-Shop
+// (desktop/shopOrders.js): bezahlte Bestellungen, die mit «Übernehmen» zur
+// Quittung werden — erst dann wird das Lager gebucht.
+export const DRAFT_TYPE = { goodsIn: "wareneingang", article: "artikel", order: "bestellung" };
 export const DRAFT_STATUS = { open: "offen", accepted: "übernommen", rejected: "verworfen" };
 
 function cleanText(value, max = 200) {
@@ -57,6 +60,56 @@ export function makeArticleDraft(input, ctx) {
       price: Math.round(price * 100) / 100,
       serialTracked: input?.serialTracked === true,
       shopText: cleanText(input?.shopText, 4000),
+    },
+  };
+}
+
+function money(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+}
+
+// Bestellung aus dem Shop (GET /api/qwui/orders) als Vorschlag. Alles wird
+// einzeln übernommen und begrenzt — der Shop ist eine Quelle von aussen.
+export function makeOrderDraft(order, ctx) {
+  const orderId = cleanText(order?.id, 80);
+  if (!orderId) throw new Error("Bestellung ohne ID.");
+  const items = (Array.isArray(order.items) ? order.items : []).slice(0, 100).map((it) => ({
+    articleNumber: cleanText(it?.articleNumber, 60),
+    name: cleanText(it?.name, 200),
+    quantity: Math.max(1, Math.min(999, Math.floor(Number(it?.quantity) || 1))),
+    price: money(it?.price) ?? 0,
+  }));
+  if (items.length === 0) throw new Error(`Bestellung ${orderId} hat keine Positionen.`);
+  const c = order.customer || {};
+  return {
+    id: ctx.newId(),
+    type: DRAFT_TYPE.order,
+    status: DRAFT_STATUS.open,
+    createdAt: ctx.now,
+    source: "shop",
+    payload: {
+      orderId,
+      number: Math.floor(Number(order.number)) || null,
+      createdAt: cleanText(order.createdAt, 40),
+      paidAt: cleanText(order.paidAt, 40),
+      payment: cleanText(order.payment, 20),
+      paymentMethod: cleanText(order.paymentMethod, 20),
+      delivery: order.delivery === "abholung" ? "abholung" : "versand",
+      note: cleanText(order.note, 500),
+      customer: {
+        name: cleanText(c.name, 120),
+        email: cleanText(c.email, 200),
+        phone: cleanText(c.phone, 40),
+        street: cleanText(c.street, 120),
+        houseNumber: cleanText(c.houseNumber, 16),
+        postalCode: cleanText(c.postalCode, 16),
+        city: cleanText(c.city, 60),
+        receiptByEmail: c.receiptByEmail === true,
+      },
+      items,
+      shipping: money(order.shipping) ?? 0,
+      total: money(order.total) ?? 0,
     },
   };
 }
