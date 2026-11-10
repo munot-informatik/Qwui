@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { Check, FolderOpen, RefreshCw } from "lucide-react";
+import { isQwuiShopFeedUrl } from "../shared/shopOrders.js";
 
 function formatDateTimeDE(iso) {
   const d = new Date(iso);
@@ -154,7 +155,7 @@ export default function ShopAnbindung() {
               />
               <strong>Bestellungen abholen</strong> — bezahlte Online-Bestellungen erscheinen unter «Vorschläge»
             </label>
-            {config.ordersEnabled && !/\/api\/qwui\/feed\/?$/.test(config.webhookUrl.trim()) && (
+            {config.ordersEnabled && !isQwuiShopFeedUrl(config.webhookUrl) && (
               <div style={s.hint}>Nur mit dem Qwui-Shop: Die Webhook-Adresse endet dann auf /api/qwui/feed.</div>
             )}
           </>
@@ -206,6 +207,9 @@ export default function ShopAnbindung() {
               {state.orders?.lastSuccessAt
                 ? `zuletzt abgeholt ${formatDateTimeDE(state.orders.lastSuccessAt)}${state.orders.pending ? ` — ${state.orders.pending} Rückmeldung(en) an den Shop ausstehend` : ""}`
                 : "noch nicht abgeholt"}
+              {state.orders?.ok && state.orders.warning && (
+                <div style={{ color: "#B5480C" }}>{state.orders.warning} — bitte im Shop unter /admin prüfen.</div>
+              )}
               {state.orders && !state.orders.ok && (
                 <div style={{ color: "#B5480C" }}>
                   Fehler am {formatDateTimeDE(state.orders.at)}: {state.orders.error} — neuer Versuch in einer Minute

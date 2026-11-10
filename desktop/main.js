@@ -402,7 +402,6 @@ if (!gotLock) {
       tokenSet: secrets.has(SHOP_WEBHOOK_TOKEN_SECRET),
       status: store.getMeta(SHOP_STATUS_META) || {},
       orders: store.getMeta(SHOP_ORDERS_STATUS_META) || null,
-      ordersPossible: !!shopBaseUrl(readShopConfig().webhookUrl),
       // Vorschau für die App: genau das, was der Shop bekommt.
       feed,
     };
@@ -468,7 +467,7 @@ if (!gotLock) {
       getConfig: readShopConfig,
       getToken: () => secrets.get(SHOP_WEBHOOK_TOKEN_SECRET),
       readDrafts,
-      addDraft,
+      addDrafts,
       readQueue: () => store.getMeta(SHOP_ORDERS_QUEUE_META) || [],
       writeQueue: (queue) => store.setMeta(SHOP_ORDERS_QUEUE_META, queue),
       readStatus: () => store.getMeta(SHOP_ORDERS_STATUS_META),
@@ -514,12 +513,17 @@ if (!gotLock) {
   }
 
   // Höchstens 200 Entwürfe behalten; die ältesten erledigten fallen weg.
-  async function addDraft(draft) {
-    const drafts = [...readDrafts(), draft];
+  // Mehrere auf einmal (Bestellungen): ein Schreibzugriff, eine Meldung an die App.
+  async function addDrafts(list) {
+    const drafts = [...readDrafts(), ...list];
     const open = drafts.filter((d) => d.status === DRAFT_STATUS.open);
     const done = drafts.filter((d) => d.status !== DRAFT_STATUS.open);
     store.setMeta(DRAFTS_META, [...done.slice(-Math.max(0, 200 - open.length)), ...open]);
     notifyDraftsChanged();
+  }
+
+  async function addDraft(draft) {
+    return addDrafts([draft]);
   }
 
   // Für Assistent und Excel-Auswertung: ohne Logos (store.getRaw), die

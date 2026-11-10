@@ -74,12 +74,16 @@ function money(value) {
 export function makeOrderDraft(order, ctx) {
   const orderId = cleanText(order?.id, 80);
   if (!orderId) throw new Error("Bestellung ohne ID.");
-  const items = (Array.isArray(order.items) ? order.items : []).slice(0, 100).map((it) => ({
-    articleNumber: cleanText(it?.articleNumber, 60),
-    name: cleanText(it?.name, 200),
-    quantity: Math.max(1, Math.min(999, Math.floor(Number(it?.quantity) || 1))),
-    price: money(it?.price) ?? 0,
-  }));
+  // Ungültige Menge oder Preis: lieber nicht übernehmen als eine falsche
+  // Quittung (z. B. CHF 0 für bezahlte Ware) vorschlagen.
+  const items = (Array.isArray(order.items) ? order.items : []).slice(0, 100).map((it) => {
+    const name = cleanText(it?.name, 200);
+    const quantity = Number(it?.quantity);
+    const price = money(it?.price);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) throw new Error(`Bestellung ${orderId}: ungültige Menge bei «${name}».`);
+    if (price === null || it?.price === null || it?.price === "") throw new Error(`Bestellung ${orderId}: ungültiger Preis bei «${name}».`);
+    return { articleNumber: cleanText(it?.articleNumber, 60), name, quantity, price };
+  });
   if (items.length === 0) throw new Error(`Bestellung ${orderId} hat keine Positionen.`);
   const c = order.customer || {};
   return {

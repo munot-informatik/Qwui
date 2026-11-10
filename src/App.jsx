@@ -1589,6 +1589,18 @@ export default function ReceiptApp() {
       return;
     }
 
+    // Online-Bestellung inzwischen verworfen (oder schon als Quittung
+    // erstellt)? Dann nicht buchen: Der Shop hat die Ware schon freigegeben.
+    if (pendingOrder) {
+      const orderDraft = drafts.find((d) => d.id === pendingOrder.draftId);
+      if (orderDraft?.status !== "offen") {
+        setStockErrors([
+          `Die Online-Bestellung Nr. ${pendingOrder.number} ist ${orderDraft ? `inzwischen ${orderDraft.status}` : "nicht mehr vorhanden"} — keine Quittung erstellt.`,
+        ]);
+        return;
+      }
+    }
+
     const number = nextReceiptNumber(receipts, lastNumber);
     const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban) && !isQrIban(company.qrBill?.iban);
     const draft = {
@@ -1625,6 +1637,8 @@ export default function ReceiptApp() {
     if (!saved) return;
     if (pendingOrder && desktopAssistant) {
       // Erst nach dem Speichern: Ohne Quittung bleibt die Bestellung offen.
+      // Schlägt der Statuswechsel fehl, erkennt «Quittung erstellen…» die
+      // Quittung über shopOrder.draftId und schliesst den Vorschlag nur noch ab.
       await desktopAssistant.setDraftStatus(pendingOrder.draftId, "übernommen", { bookedAt: receipt.createdAt });
       setPendingOrder(null);
     }
@@ -1688,6 +1702,8 @@ export default function ReceiptApp() {
     setVatEnabled(!!r.vatEnabled);
     setQrBillEnabled(!!r.qrBillEnabled);
     setPaymentTermDays(paymentTermOf(r));
+    // Eine angefangene Quittung zu einer Online-Bestellung gilt nicht mehr.
+    setPendingOrder(null);
     setEditingReceiptId(r.id);
     setMode("form");
     setTab("new");

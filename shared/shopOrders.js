@@ -2,6 +2,14 @@
 // Funktion: Die Quittung wird danach ganz normal in der App erstellt, mit
 // Lagerbuchung, Nummer und E-Mail-Versand wie jede andere.
 
+// Bestellungen gibt es nur beim Qwui-Shop: Er nimmt den Feed unter
+// …/api/qwui/feed an, die übrigen Adressen leiten sich davon ab.
+export const QWUI_SHOP_FEED_PATH = /\/api\/qwui\/feed\/?$/;
+
+export function isQwuiShopFeedUrl(url) {
+  return QWUI_SHOP_FEED_PATH.test(String(url || "").trim());
+}
+
 const PAYMENT_LABEL = { twint: "TWINT", card: "Karte" };
 
 export function paymentLabel(payload) {

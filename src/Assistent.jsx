@@ -7,6 +7,7 @@
 
 import React, { useEffect, useState } from "react";
 import { Check, Copy, RefreshCw, X, Bot, Download } from "lucide-react";
+import { paymentLabel } from "../shared/shopOrders.js";
 
 function formatDateTimeDE(iso) {
   const d = new Date(iso);
@@ -45,7 +46,6 @@ function claudeConfig(port, token) {
   );
 }
 
-// drafts: alle Entwürfe; onAccept(draft) bucht und liefert Fehlermeldungen (leer = ok).
 const DRAFT_TITLE = { wareneingang: "Wareneingang", artikel: "Neuer Artikel", bestellung: "Online-Bestellung" };
 
 function orderAddress(c) {
@@ -53,7 +53,6 @@ function orderAddress(c) {
 }
 
 function OrderDetails({ payload: p }) {
-  const method = { twint: "TWINT", card: "Karte" }[p.paymentMethod] || p.paymentMethod || "online";
   return (
     <div style={s.grid}>
       <span style={s.muted}>Kunde</span>
@@ -75,8 +74,7 @@ function OrderDetails({ payload: p }) {
       </span>
       <span style={s.muted}>Bezahlt</span>
       <span>
-        CHF {chf(p.total)} mit {method}
-        {p.payment === "testkasse" ? " (Testkasse)" : ""}
+        CHF {chf(p.total)} mit {paymentLabel(p)}
       </span>
       {p.note && (
         <>
@@ -88,9 +86,12 @@ function OrderDetails({ payload: p }) {
   );
 }
 
+// drafts: alle Entwürfe; onAccept(draft) bucht und liefert Fehlermeldungen (leer = ok).
 export function Vorschlaege({ drafts, describeArticle, onAccept, onReject }) {
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(null);
+  // Bezahlte Online-Bestellung: Verwerfen erst nach einem zweiten Klick.
+  const [confirmReject, setConfirmReject] = useState(null);
   const open = drafts.filter((d) => d.status === "offen").sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const done = drafts.filter((d) => d.status !== "offen").sort((a, b) => ((a.decidedAt || "") < (b.decidedAt || "") ? 1 : -1));
 
@@ -99,6 +100,15 @@ export function Vorschlaege({ drafts, describeArticle, onAccept, onReject }) {
     const errs = await onAccept(d);
     setErrors((prev) => ({ ...prev, [d.id]: errs }));
     setBusy(null);
+  }
+
+  function reject(d) {
+    if (d.type === "bestellung" && confirmReject !== d.id) {
+      setConfirmReject(d.id);
+      return;
+    }
+    setConfirmReject(null);
+    onReject(d);
   }
 
   return (
@@ -120,11 +130,20 @@ export function Vorschlaege({ drafts, describeArticle, onAccept, onReject }) {
               <button type="button" onClick={() => accept(d)} disabled={busy === d.id} style={s.primaryBtn}>
                 <Check size={14} /> {busy === d.id ? "Buche…" : d.type === "bestellung" ? "Quittung erstellen…" : "Übernehmen"}
               </button>
-              <button type="button" onClick={() => onReject(d)} disabled={busy === d.id} style={s.secondaryBtn}>
-                <X size={14} /> Verwerfen
+              <button type="button" onClick={() => reject(d)} disabled={busy === d.id} style={s.secondaryBtn}>
+                <X size={14} /> {confirmReject === d.id ? "Wirklich verwerfen" : "Verwerfen"}
               </button>
             </div>
           </div>
+          {confirmReject === d.id && (
+            <div style={{ color: "#B5480C", fontSize: 13, marginTop: 8 }}>
+              Die Bestellung ist bezahlt. Verwerfen gibt die Ware im Shop wieder frei und lässt sich nicht rückgängig machen; das Geld
+              erstattest du im Zahlungsdienst (z. B. Stripe).{" "}
+              <button type="button" onClick={() => setConfirmReject(null)} style={s.linkBtn}>
+                Abbrechen
+              </button>
+            </div>
+          )}
           {d.type === "bestellung" ? (
             <OrderDetails payload={d.payload} />
           ) : d.type === "wareneingang" ? (
@@ -395,6 +414,16 @@ const s = {
     alignItems: "center",
     gap: 6,
     width: "fit-content",
+  },
+  linkBtn: {
+    background: "transparent",
+    border: "none",
+    color: "#16181D",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    textDecoration: "underline",
+    padding: 0,
   },
   primaryBtn: {
     background: "#16181D",

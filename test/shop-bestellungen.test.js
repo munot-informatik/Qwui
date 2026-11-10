@@ -49,6 +49,14 @@ describe("Bestellung als Vorschlag", () => {
     expect(() => makeOrderDraft({ ...order, id: "" }, ctx)).toThrow(/ID/);
     expect(() => makeOrderDraft({ ...order, items: [] }, ctx)).toThrow(/Positionen/);
   });
+
+  it("übernimmt keine Position mit ungültigem Preis oder ungültiger Menge", () => {
+    const line = order.items[0];
+    for (const bad of [{ price: null }, { price: "abc" }, { price: -1 }, { quantity: 0 }, { quantity: 1.5 }, { quantity: "x" }]) {
+      expect(() => makeOrderDraft({ ...order, items: [{ ...line, ...bad }] }, ctx)).toThrow(/ungültig/);
+    }
+    expect(makeOrderDraft({ ...order, items: [{ ...line, price: 0 }] }, ctx).payload.items[0].price).toBe(0);
+  });
 });
 
 describe("Bestellung → Quittungsformular", () => {
@@ -142,7 +150,7 @@ function setup(orders, config = {}) {
     getConfig: () => ({ webhookEnabled: true, webhookUrl: "https://shop.example.ch/api/qwui/feed", ordersEnabled: true, ...config }),
     getToken: () => "geheim-geheim-geheim",
     readDrafts: () => state.drafts,
-    addDraft: async (d) => state.drafts.push(d),
+    addDrafts: async (list) => state.drafts.push(...list),
     readQueue: () => state.queue,
     writeQueue: (q) => (state.queue = q),
     readStatus: () => state.status,
@@ -198,6 +206,44 @@ describe("Bestellungen abholen", () => {
     expect(orders[0].qwuiStatus).toBe("verworfen");
   });
 
+  it("überspringt eine fehlerhafte Bestellung und holt die übrigen trotzdem ab", async () => {
+    const bad = { ...structuredClone(order), id: "8f0c2a4e-0000-4000-8000-000000000002", number: 13, items: [] };
+    const good = { ...structuredClone(order), id: "8f0c2a4e-0000-4000-8000-000000000003", number: 14 };
+    const { imp, state } = setup([bad, good]);
+    await imp.poll();
+    expect(state.drafts.map((d) => d.payload.number)).toEqual([14]);
+    expect(good.qwuiStatus).toBe("abgeholt");
+    expect(bad.qwuiStatus).toBe(null);
+    expect(state.status).toMatchObject({ ok: true, added: 1 });
+    expect(state.status.warning).toMatch(/1 Bestellung\(en\) übersprungen: .*keine Positionen/);
+  });
+
+  it("verliert keine Meldung, die während des Sendens dazukommt", async () => {
+    const state = { drafts: [], queue: [{ orderId: "a", status: "verworfen", bookedAt: null }], status: null };
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const imp = createOrderImport({
+      getConfig: () => ({ webhookEnabled: true, webhookUrl: "https://shop.example.ch/api/qwui/feed", ordersEnabled: true }),
+      getToken: () => "geheim-geheim-geheim",
+      readDrafts: () => state.drafts,
+      addDrafts: async () => {},
+      readQueue: () => state.queue,
+      writeQueue: (q) => (state.queue = q),
+      readStatus: () => state.status,
+      writeStatus: (st) => (state.status = st),
+      // Der Shop ist nicht erreichbar; die erste Meldung hängt, bis wir sie freigeben.
+      fetch: async () => {
+        await gate;
+        throw new Error("offline");
+      },
+    });
+    const polling = imp.poll();
+    const reporting = imp.report("b", "gebucht", "2027-02-13T10:06:00.000Z");
+    release();
+    await Promise.all([polling, reporting]);
+    expect(state.queue.map((e) => e.orderId).sort()).toEqual(["a", "b"]);
+  });
+
   it("tut nichts, wenn das Abholen aus ist oder die Adresse nicht passt", async () => {
     for (const config of [{ ordersEnabled: false }, { webhookUrl: "https://andere.example.ch/feed" }, { webhookEnabled: false }]) {
       const { imp, shop, state } = setup([structuredClone(order)], config);
@@ -215,7 +261,7 @@ describe("Bestellungen abholen", () => {
         getConfig: () => ({ webhookEnabled: true, webhookUrl: "https://shop.example.ch/api/qwui/feed", ordersEnabled: true }),
         getToken: () => "x",
         readDrafts: () => [],
-        addDraft: async () => {},
+        addDrafts: async () => {},
         readQueue: () => [],
         writeQueue: () => {},
         readStatus: () => state.status,
