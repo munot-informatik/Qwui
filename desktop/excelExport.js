@@ -3,7 +3,8 @@
 // Ansehen, Filtern und Weitergeben — z. B. an die Treuhand. Änderungen darin
 // fliessen nicht zurück in Qwui.
 //
-// Tabellenblätter: Kunden, Zahlungen, Inventar, Exemplare, Lagerbewegungen.
+// Tabellenblätter: Kunden, Zahlungen, Aufwand, Inventar, Exemplare,
+// Lagerbewegungen. «Aufwand» = interne Kilometer und Material pro Einsatz.
 // Jedes Blatt mit fixierter Kopfzeile und Filter.
 
 import ExcelJS from "exceljs";
@@ -12,6 +13,7 @@ import { statusInfo, paymentTermOf, addDaysISO, documentWord, STATUS_STYLE } fro
 import { itemLineTotal, quantityPrefix } from "./shared/items.js";
 import { UNIT_STATUS_LABEL } from "./shared/serials.js";
 import { MOVEMENT_TYPE_LABEL, productStock, isSerialTracked } from "./shared/stock.js";
+import { costTotals, sumCosts } from "./shared/internalCosts.js";
 
 const SOURCE_LABEL = { app: "App", assistent: "Assistent" };
 
@@ -112,6 +114,44 @@ export function buildEvaluationWorkbook({ customers = [], receipts = [], invento
     row.getCell("status").fill = { type: "pattern", pattern: "solid", fgColor: { argb: STATUS_STYLE[color].fill } };
     row.getCell("status").font = { bold: true, color: { argb: STATUS_STYLE[color].font } };
   });
+
+  // Interner Aufwand pro Beleg (Kilometer, Material) — für die Buchhaltung.
+  const withCosts = [...receipts]
+    .filter((r) => costTotals(r).total > 0 || costTotals(r).km > 0)
+    .sort((a, b) => (a.date || "").localeCompare(b.date || "") || String(a.number).localeCompare(String(b.number)));
+  const costSum = sumCosts(withCosts);
+  addSheet(
+    wb,
+    "Aufwand",
+    [
+      ["Datum", "date", 12],
+      ["Nr.", "number", 8],
+      ["Kunde", "customer", 22],
+      ["Kilometer", "km", 11, "#,##0.0"],
+      ["Ansatz (CHF/km)", "rate", 15, "0.00"],
+      ["Fahrkosten (CHF)", "travel", 16, "#,##0.00"],
+      ["Material", "materials", 40],
+      ["Material (CHF)", "material", 14, "#,##0.00"],
+      ["Aufwand total (CHF)", "total", 18, "#,##0.00"],
+    ],
+    [
+      ...withCosts.map((r) => {
+        const c = costTotals(r);
+        return {
+          date: r.date || "",
+          number: r.number || "",
+          customer: r.customer?.name || "",
+          km: c.km,
+          rate: c.km ? c.kmRate : null,
+          travel: c.travel,
+          materials: (r.internalCosts?.materials || []).map((m) => `${m.description} ${Number(m.amount || 0).toFixed(2)}`).join("; "),
+          material: c.material,
+          total: c.total,
+        };
+      }),
+      ...(withCosts.length ? [{ customer: "Total", km: costSum.km, travel: costSum.travel, material: costSum.material, total: costSum.total }] : []),
+    ]
+  );
 
   addSheet(
     wb,

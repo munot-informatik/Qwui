@@ -3,6 +3,22 @@
 Alle nennenswerten Änderungen an Qwui. Versionsnummern folgen der Web- und
 Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
 
+## Unveröffentlicht
+
+### Aufwand für die Buchhaltung
+
+- Neuer Bereich **Aufwand für die Buchhaltung** in der Quittung: gefahrene
+  Kilometer und verbrauchtes Material (Einkaufspreis) eines Einsatzes vor Ort.
+  Erscheint **nie** auf dem Beleg — weder auf Bildschirm, Druck, PDF, E-Mail,
+  QR-Rechnung oder Mahnung, noch im Shop-Feed oder beim Assistenten.
+- Kilometeransatz unter **Firma**, Vorgabe CHF 0.75 pro Kilometer: Höchstansatz
+  der ESTV für die geschäftliche Benützung des Privatfahrzeugs ab 2026
+  (Wegleitung zum Lohnausweis, Rz 52; bis 2025: CHF 0.70). Jede Quittung
+  speichert ihren Ansatz, ältere Belege behalten ihren.
+- **Belege** zeigen den Aufwand pro Beleg und die Summen im Zeitraum
+  (Fahrkosten, Material, total); der Excel-Export hat dafür eigene Spalten.
+- Die **Excel-Auswertung** der Windows-Version hat ein neues Blatt «Aufwand».
+
 ## 1.3.0 — 8. November 2026
 
 Einfachere Bedienung.

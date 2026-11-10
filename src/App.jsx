@@ -52,6 +52,8 @@ import { Vorschlaege, Schnittstelle } from "./Assistent.jsx";
 import { LabelSheet, useLabelPrinter, LABEL_PRINT_CSS } from "./Etiketten.jsx";
 import { resolveSaleScan, applySaleScan } from "../shared/sale.js";
 import { localDateISO } from "../shared/dates.js";
+import { normalizeCosts, companyKmRate, DEFAULT_KM_RATE } from "../shared/internalCosts.js";
+import { InterneKosten, costsToForm } from "./InterneKosten.jsx";
 import { Kundenwahl, KundenListe, PersonFields, WALK_IN_NAME } from "./Kunden.jsx";
 import { findArticle } from "../shared/reports.js";
 
@@ -333,6 +335,8 @@ export default function ReceiptApp() {
   const [dateTouched, setDateTouched] = useState(false);
   const [items, setItems] = useState([emptyItem()]);
   const [note, setNote] = useState("");
+  // Interner Aufwand (Kilometer, Material) — nur für die Buchhaltung.
+  const [costsForm, setCostsForm] = useState(() => costsToForm(null, DEFAULT_KM_RATE));
   const [vatEnabled, setVatEnabled] = useState(false);
   const [qrBillEnabled, setQrBillEnabled] = useState(false);
   const [paymentTermDays, setPaymentTermDays] = useState(DEFAULT_PAYMENT_TERM_DAYS);
@@ -351,7 +355,7 @@ export default function ReceiptApp() {
   // weiterläuft (z. B. der Mailversand) — dessen Closure kennt nur den Stand
   // von vor dem await und würde später Geändertes wieder überschreiben.
   const latest = useRef({});
-  latest.current = { receipts, inventory, units, movementsByKey, lastNumber, currentReceipt };
+  latest.current = { receipts, inventory, units, movementsByKey, lastNumber, currentReceipt, company };
 
   useEffect(() => {
     (async () => {
@@ -1265,6 +1269,12 @@ export default function ReceiptApp() {
     );
   }
 
+  // Geänderter Kilometeransatz der Firma gilt für das nächste, noch leere Formular.
+  useEffect(() => {
+    if (editingReceiptId) return;
+    setCostsForm((f) => (f.km || f.materials.length ? f : { ...f, kmRate: String(companyKmRate(company)) }));
+  }, [company.kmRate, editingReceiptId]);
+
   // Datum nachführen, wenn Mitternacht vorbei ist (nicht beim Bearbeiten und
   // nicht, wenn jemand ein Datum gewählt hat).
   useEffect(() => {
@@ -1386,6 +1396,7 @@ export default function ReceiptApp() {
     setDate(todayISO());
     setDateTouched(false);
     setItems([emptyItem()]);
+    setCostsForm(costsToForm(null, companyKmRate(latest.current.company)));
     setNote("");
     setVatEnabled(false);
     setQrBillEnabled(false);
@@ -1515,6 +1526,7 @@ export default function ReceiptApp() {
         paymentTermDays,
         paid,
         note,
+        internalCosts: normalizeCosts(costsForm),
         editedAt: new Date().toISOString(),
         // Der Kunde hat die frühere Fassung erhalten — das soll sichtbar bleiben.
         ...(existing.emailDelivery ? { emailDelivery: { ...existing.emailDelivery, beforeEdit: true } } : {}),
@@ -1555,6 +1567,7 @@ export default function ReceiptApp() {
       paymentTermDays,
       paid: !isQrBill,
       note,
+      ...(normalizeCosts(costsForm) ? { internalCosts: normalizeCosts(costsForm) } : {}),
       company,
       createdAt: new Date().toISOString(),
     };
@@ -1626,6 +1639,7 @@ export default function ReceiptApp() {
     setStockErrors([]);
     setStockWarnings([]);
     setNote(r.note || "");
+    setCostsForm(costsToForm(r.internalCosts, companyKmRate(company)));
     setVatEnabled(!!r.vatEnabled);
     setQrBillEnabled(!!r.qrBillEnabled);
     setPaymentTermDays(paymentTermOf(r));
@@ -2370,6 +2384,10 @@ export default function ReceiptApp() {
                   />
                 </FieldGroup>
 
+                <div style={{ marginBottom: 24 }}>
+                  <InterneKosten value={costsForm} onChange={setCostsForm} />
+                </div>
+
                 {desktopMail && !editingReceiptId && (
                   <FieldGroup label="Nach dem Erstellen">
                     <div style={{ display: "grid", gap: 8 }}>
@@ -2876,6 +2894,29 @@ export default function ReceiptApp() {
                     value={companyDraft.vatNumber}
                     onChange={(e) => setCompanyDraft({ ...companyDraft, vatNumber: e.target.value })}
                   />
+                </div>
+
+                <div style={{ marginTop: 28, maxWidth: 420 }}>
+                  <div style={styles.fieldLabel}>Kilometeransatz für die Buchhaltung</div>
+                  <div style={{ fontSize: 12, color: "#8B8F96", marginBottom: 8 }}>
+                    Für Fahrten zu Einsätzen vor Ort, erfasst beim Aufwand einer Quittung. Erscheint nie auf dem Beleg.
+                    Die ESTV nennt ab 2026 höchstens CHF 0.75 pro Kilometer für die geschäftliche Benützung des
+                    Privatfahrzeugs (Wegleitung zum Lohnausweis, Rz 52; bis 2025: CHF 0.70).
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="mono" style={styles.chfLabel}>CHF</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={companyDraft.kmRate ?? DEFAULT_KM_RATE}
+                      onChange={(e) => setCompanyDraft({ ...companyDraft, kmRate: e.target.value })}
+                      className="mono"
+                      style={{ width: 90, textAlign: "right" }}
+                      aria-label="Kilometeransatz"
+                    />
+                    <span style={styles.muted}>pro Kilometer</span>
+                  </div>
                 </div>
 
                 <div style={{ marginTop: 32, maxWidth: 420 }}>

@@ -3,9 +3,10 @@
 // suchen, öffnen, bearbeiten, löschen, Zahlungen verbuchen, Mahnung, Excel.
 
 import React, { useMemo, useState } from "react";
-import { Download, Check, Loader2, AlertTriangle, Bell, Search, X, Trash2 } from "lucide-react";
+import { Download, Check, Loader2, AlertTriangle, Bell, Search, X, Trash2, Lock } from "lucide-react";
 import { buildMahnungPdfBytes } from "./receiptPdf.js";
 import { filterReceipts } from "../shared/search.js";
+import { costTotals, sumCosts, costSummaryText } from "../shared/internalCosts.js";
 
 function chf(n) {
   const num = Number(n) || 0;
@@ -94,6 +95,8 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
     .reduce((sum, r) => sum + (Number(r.total) || 0), 0);
   const totalPaid = total - totalOpen;
   const overdueCount = filtered.filter(isOverdue).length;
+  // Interner Aufwand (Kilometer, Material) im Zeitraum — nur hier, nie beim Kunden.
+  const costs = sumCosts(filtered);
 
   function periodLabel() {
     if (searching) return `Suche «${query.trim()}»`;
@@ -113,15 +116,23 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
         "Betrag (CHF)": Number(r.total) || 0,
         "MWST enthalten": r.vatEnabled ? "Ja" : "Nein",
         Status: statusLabel(statusOf(r)),
+        Kilometer: costTotals(r).km || "",
+        "Fahrkosten (CHF)": costTotals(r).travel || "",
+        "Material (CHF)": costTotals(r).material || "",
+        "Aufwand total (CHF)": costTotals(r).total || "",
+        "Material (Beschreibung)": (r.internalCosts?.materials || []).map((m) => `${m.description} ${Number(m.amount || 0).toFixed(2)}`).join("; "),
       }));
 
       rows.push({});
       rows.push({ "Nr.": "", Datum: "", Kunde: "Total", "Betrag (CHF)": total, "MWST enthalten": "", Status: "" });
       rows.push({ "Nr.": "", Datum: "", Kunde: "davon bezahlt", "Betrag (CHF)": totalPaid, "MWST enthalten": "", Status: "" });
       rows.push({ "Nr.": "", Datum: "", Kunde: "davon offen", "Betrag (CHF)": totalOpen, "MWST enthalten": "", Status: "" });
+      if (costs.total > 0 || costs.km > 0) {
+        rows.push({ "Nr.": "", Datum: "", Kunde: "Aufwand intern", Kilometer: costs.km, "Fahrkosten (CHF)": costs.travel, "Material (CHF)": costs.material, "Aufwand total (CHF)": costs.total });
+      }
 
       const worksheet = XLSX.utils.json_to_sheet(rows);
-      worksheet["!cols"] = [{ wch: 8 }, { wch: 12 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 18 }];
+      worksheet["!cols"] = [{ wch: 8 }, { wch: 12 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 10 }, { wch: 15 }, { wch: 14 }, { wch: 18 }, { wch: 40 }];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Belege");
 
@@ -254,6 +265,11 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
                       {r.editedAt ? " · bearbeitet" : ""}
                       {r.emailDelivery ? ` · E-Mail ${r.emailDelivery.status}${r.emailDelivery.beforeEdit ? " (frühere Fassung)" : ""}` : ""}
                     </div>
+                    {costSummaryText(r) && (
+                      <div style={styles.costLine} title="Interner Aufwand — steht nicht auf dem Beleg">
+                        <Lock size={11} /> Aufwand: {costSummaryText(r)}
+                      </div>
+                    )}
                     {overdue && (
                       <div style={styles.overdueTag}>
                         <AlertTriangle size={11} />
@@ -345,6 +361,27 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
             <span>Total {periodLabel()}</span>
             <span className="mono">CHF {chf(total)}</span>
           </div>
+          {(costs.total > 0 || costs.km > 0) && (
+            <div style={styles.costBox}>
+              <div style={{ ...styles.totalRow, fontWeight: 600 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <Lock size={12} /> Aufwand intern
+                </span>
+              </div>
+              <div style={styles.totalRow}>
+                <span>Fahrkosten ({costs.km} km)</span>
+                <span className="mono">CHF {chf(costs.travel)}</span>
+              </div>
+              <div style={styles.totalRow}>
+                <span>Material</span>
+                <span className="mono">CHF {chf(costs.material)}</span>
+              </div>
+              <div style={{ ...styles.totalRow, fontWeight: 600 }}>
+                <span>Aufwand total</span>
+                <span className="mono">CHF {chf(costs.total)}</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -362,6 +399,8 @@ const styles = {
   },
   h1: { fontSize: 22, fontWeight: 700, margin: "0 0 20px 0" },
   filterRow: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
+  costLine: { display: "flex", alignItems: "center", gap: 4, marginTop: 3, fontSize: 11, color: "#5B5F66" },
+  costBox: { marginTop: 14, paddingTop: 8, borderTop: "1px dashed #CBCED2", color: "#5B5F66" },
   searchRow: { display: "flex", alignItems: "center", gap: 8, border: "1px solid #DADDE1", background: "#fff", padding: "0 10px", marginBottom: 10 },
   iconBtn: { border: "none", background: "transparent", cursor: "pointer", padding: 6, display: "flex" },
   actionBtn: {

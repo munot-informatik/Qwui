@@ -280,6 +280,14 @@ sobald alles eingerichtet ist, oder mit **Ausblenden**.
 **Belege** (bis 1.2 getrennt als «Verlauf» und «Buchhaltung»):
 
 - Suchfeld: Nummer, Kunde, Artikel oder Seriennummer — sucht über alle Monate.
+- **Aufwand für die Buchhaltung:** In der Quittung lassen sich unter «Aufwand für
+  die Buchhaltung» gefahrene Kilometer und Material (Einkaufspreis) eines
+  Einsatzes vor Ort erfassen. Das steht nie auf dem Beleg für den Kunden, nur
+  unter Belege (pro Beleg und als Summe im Zeitraum), im Excel-Export und in der
+  Excel-Auswertung (Blatt «Aufwand»). Den Kilometeransatz legt man unter Firma
+  fest; Vorgabe ist CHF 0.75, der Höchstansatz der ESTV ab 2026 (Wegleitung zum
+  Lohnausweis, Rz 52). Ob und wie der Aufwand in der eigenen Steuererklärung
+  abgezogen wird, klärt die Treuhand.
 - Jeder Beleg lässt sich **öffnen**, **bearbeiten** oder **löschen** (mit Rückfrage).
 - Nach Monat/Jahr filtern, offene vs. bezahlte QR-Rechnungen
   markieren, Summen einsehen, per Button **Export zu Excel** als `.xlsx`

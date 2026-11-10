@@ -28,6 +28,7 @@ const data = {
         { kind: "product", description: "Kreide", amount: "4", quantity: 2 },
       ],
       emailDelivery: { status: "gesendet", at: "2027-02-13T10:00:00.000Z" },
+      internalCosts: { km: 42, kmRate: 0.75, materials: [{ id: "m", description: "Tuch", amount: 18.5 }] },
     },
   ],
   inventory: [
@@ -62,9 +63,17 @@ async function readBack() {
 }
 
 describe("Excel-Auswertung", () => {
-  it("enthält alle fünf Tabellenblätter", async () => {
+  it("führt den internen Aufwand auf einem eigenen Blatt, mit Total", async () => {
+    const { rows } = await readBack();
+    const [kopf, beleg, total] = rows("Aufwand");
+    expect(kopf).toEqual(["Datum", "Nr.", "Kunde", "Kilometer", "Ansatz (CHF/km)", "Fahrkosten (CHF)", "Material", "Material (CHF)", "Aufwand total (CHF)"]);
+    expect(beleg).toEqual(["2027-02-13", "0001", "Sandra Meier", 42, 0.75, 31.5, "Tuch 18.50", 18.5, 50]);
+    expect(total.slice(2)).toEqual(["Total", 42, undefined, 31.5, undefined, 18.5, 50]);
+  });
+
+  it("enthält alle Tabellenblätter", async () => {
     const { wb } = await readBack();
-    expect(wb.worksheets.map((s) => s.name)).toEqual(["Kunden", "Zahlungen", "Inventar", "Exemplare", "Lagerbewegungen"]);
+    expect(wb.worksheets.map((s) => s.name)).toEqual(["Kunden", "Zahlungen", "Aufwand", "Inventar", "Exemplare", "Lagerbewegungen"]);
   });
 
   it("zeigt Positionen mit Menge, S/N und verrechnetem Betrag", async () => {
