@@ -50,7 +50,7 @@ function asToolResult(fn) {
   };
 }
 
-const server = new McpServer({ name: "qwui", version: "1.3.0" });
+const server = new McpServer({ name: "qwui", version: "1.3.1" });
 const readOnly = { readOnlyHint: true, openWorldHint: false };
 const draft = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 

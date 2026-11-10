@@ -7,7 +7,8 @@
 // erstellen.
 // v4: Version 1.2.1 — Etikettendruck.
 // v5: Version 1.3.0 — neue Seitenleiste, Belege, Verkauf per Scan.
-const CACHE_NAME = "quittungs-tool-v5";
+// v6: Version 1.3.1 — Aufwand für die Buchhaltung.
+const CACHE_NAME = "quittungs-tool-v6";
 const ASSETS_TO_CACHE = ["./", "./index.html", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
