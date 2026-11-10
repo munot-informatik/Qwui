@@ -17,6 +17,10 @@ Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
   «abgeholt», «gebucht» oder «verworfen»; eine verlorene Meldung wird beim
   nächsten Abholen wiederholt. Bis zur Buchung hält der Shop die Ware selbst
   zurück, damit nichts doppelt verkauft wird.
+- Eine bezahlte Bestellung lässt sich nur mit einem zweiten Klick
+  («Wirklich verwerfen») verwerfen; das Geld erstattest du im Zahlungsdienst.
+- Eine fehlerhafte Bestellung (z. B. ohne gültigen Preis) wird übersprungen
+  und unter **Einstellungen → Shop** gemeldet; die übrigen kommen trotzdem an.
 
 ## 1.3.1 — 10. November 2026
 
