@@ -3,6 +3,21 @@
 Alle nennenswerten Änderungen an Qwui. Versionsnummern folgen der Web- und
 Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
 
+## 1.4.0 — 10. November 2026
+
+### Bestellungen aus dem Online-Shop
+
+- Die Windows-Version holt jede Minute die bezahlten Bestellungen aus dem
+  eigenen Online-Shop ab: **Einstellungen → Shop → «Bestellungen abholen»**.
+  Der Shop ist ein eigenes Projekt auf Cloudflare Pages.
+- Jede Bestellung erscheint unter **Vorschläge** mit Kunde, Artikeln,
+  Versand oder Abholung und Zahlungsart. **«Quittung erstellen…»** öffnet eine
+  ausgefüllte Quittung; Artikel mit Seriennummer stehen einzeln darin.
+- Erst beim Erstellen der Quittung bucht Qwui das Lager. Qwui meldet dem Shop
+  «abgeholt», «gebucht» oder «verworfen»; eine verlorene Meldung wird beim
+  nächsten Abholen wiederholt. Bis zur Buchung hält der Shop die Ware selbst
+  zurück, damit nichts doppelt verkauft wird.
+
 ## 1.3.1 — 10. November 2026
 
 ### Aufwand für die Buchhaltung

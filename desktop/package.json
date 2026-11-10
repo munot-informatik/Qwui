@@ -1,7 +1,7 @@
 {
   "name": "qwui-desktop",
   "productName": "Qwui",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Qwui Windows-Desktop-Version (Electron, lokale SQLite-Datenbank)",
   "private": true,
   "type": "module",
