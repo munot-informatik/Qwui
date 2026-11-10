@@ -43,6 +43,7 @@
       "backupCrypto.js",
       "autoBackup.js",
       "shopSync.js",
+      "shopOrders.js",
       "localApi.js",
       "excelExport.js",
       "ocr.js",
