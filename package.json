@@ -2,6 +2,7 @@
   "name": "qwui",
   "productName": "Qwui",
   "version": "1.4.0",
+  "license": "AGPL-3.0-only",
   "description": "Qwui – Schweizer Quittungs-Tool (Web-App)",
   "type": "module",
   "scripts": {

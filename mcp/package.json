@@ -1,6 +1,7 @@
 {
   "name": "qwui-mcp",
   "version": "1.4.0",
+  "license": "AGPL-3.0-only",
   "description": "MCP-Server für Claude Desktop: spricht mit der lokalen Schnittstelle der Qwui-Windows-Version",
   "private": true,
   "type": "module",

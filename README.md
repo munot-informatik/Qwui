@@ -32,6 +32,7 @@ eingerichtete, live erreichbare App" durch.
 20. [Shop-Anbindung (Windows)](#20-shop-anbindung-windows)
 21. [Assistent (Claude Desktop)](#21-assistent-claude-desktop)
 22. [Tests](#22-tests)
+23. [Lizenz](#23-lizenz)
 
 ---
 
@@ -768,3 +769,17 @@ Verschlüsselung und Rotation der Sicherungen, Shop-Feed und Webhook, die lokale
 Schnittstelle samt Token-Schutz und den MCP-Server über stdio. Abhängigkeiten
 aus `desktop/` und `mcp/` werden dafür gebraucht, deshalb die drei
 `npm install`.
+
+## 23. Lizenz
+
+Copyright © 2026 Matthias Kubin, [Munot Informatik](https://munot-informatik.ch).
+
+Qwui ist freie Software unter der **GNU Affero General Public License, Version 3**
+(`AGPL-3.0-only`), siehe [LICENSE](LICENSE). Du darfst Qwui verwenden, ändern
+und weitergeben. Wer eine geänderte Fassung weitergibt oder als Webdienst
+anbietet, muss den Quellcode dieser Fassung unter derselben Lizenz offenlegen.
+
+Für eine Nutzung ohne diese Pflicht (z. B. in einem geschlossenen Produkt) ist
+eine eigene Lizenz möglich — Anfrage über [munot-informatik.ch](https://munot-informatik.ch).
+
+Der Online-Shop zu Qwui ist ein eigenes Projekt und nicht Teil dieses Repositorys.

@@ -2,6 +2,7 @@
   "name": "qwui-desktop",
   "productName": "Qwui",
   "version": "1.4.0",
+  "license": "AGPL-3.0-only",
   "description": "Qwui Windows-Desktop-Version (Electron, lokale SQLite-Datenbank)",
   "private": true,
   "type": "module",
