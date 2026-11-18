@@ -1,0 +1,1014 @@
+<!doctype html>
+<!--
+  Quelle der Schulungsunterlagen. PDF neu erzeugen (PowerShell, im Ordner docs/schulung):
+  & "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --headless=new --no-pdf-header-footer --virtual-time-budget=10000 `
+    --print-to-pdf="$PWD\..\Qwui-Schulungsunterlagen.pdf" "$PWD\Qwui-Schulungsunterlagen.html"
+  (Edge braucht absolute Pfade.) Bildschirmfotos in bilder/, Positionen der Markierungen in bilder/marks.js.
+  Beispieldaten der erfundenen Firma «Billard-Fachgeschäft Muster».
+-->
+<html lang="de-CH">
+<head>
+<meta charset="utf-8">
+<title>Qwui – Schulungsunterlagen</title>
+<script src="bilder/marks.js"></script>
+<style>
+  @page { size: A4; margin: 16mm 15mm 17mm 15mm;
+    @bottom-left { content: "Qwui 1.4.0 · Schulungsunterlagen"; font: 7.5pt "Segoe UI", sans-serif; color: #8B8F96; }
+    @bottom-right { content: counter(page) " / " counter(pages); font: 600 7.5pt "Segoe UI", sans-serif; color: #8B8F96; }
+  }
+  @page cover { margin: 0; @bottom-left { content: none; } @bottom-right { content: none; } }
+  @page divider { margin: 0; @bottom-left { content: none; } @bottom-right { content: none; } }
+  :root { --ink:#16181D; --muted:#5B5F66; --line:#DADDE1; --soft:#F5F6F8; --brand:#E30613;
+          --a:#1F5FBF; --b:#D7263D; --cc:#0E7C86; --d:#1F7A4D; --e:#6B46C1; --f:#C2610C; --c: var(--brand); }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; color: var(--ink); font-size: 9.9pt; line-height: 1.48; margin: 0; }
+  .pa { --c: var(--a); } .pb { --c: var(--b); } .pc { --c: var(--cc); } .pd { --c: var(--d); } .pe { --c: var(--e); } .pf { --c: var(--f); }
+  .tint { background: color-mix(in srgb, var(--c) 8%, white); }
+
+  /* ---------- Überschriften ---------- */
+  h1 { font-size: 16pt; line-height: 1.2; margin: 4px 0 8px; display: flex; align-items: center; gap: 10px; break-after: avoid; padding-bottom: 6px; border-bottom: 2px solid var(--c); }
+  h1 .nr { flex: 0 0 auto; min-width: 30px; height: 30px; border-radius: 8px; background: var(--c); color: #fff; font-size: 13pt; display: inline-flex; align-items: center; justify-content: center; padding: 0 7px; }
+  h1 .tag { margin-left: auto; }
+  h2 { font-size: 11.6pt; margin: 15px 0 4px; color: var(--c); break-after: avoid; }
+  h3 { font-size: 10.2pt; margin: 10px 0 3px; break-after: avoid; }
+  .chapter { break-before: page; }
+  .chapter.cont { break-before: auto; margin-top: 18px; }
+  p { margin: 3px 0 7px; }
+  ul, ol { margin: 3px 0 8px; padding-left: 18px; }
+  li { margin: 2px 0; }
+  li::marker { color: var(--c); }
+  a { color: inherit; text-decoration: none; }
+  code, .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8.8pt; }
+  code { background: var(--soft); padding: 0 3px; border-radius: 3px; }
+  pre { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8.2pt; line-height: 1.38; background: #15171C; color: #E8EAED; padding: 9px 11px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; margin: 5px 0 9px; break-inside: avoid; border-left: 4px solid var(--c); }
+  pre .k { color: #8AB4F8; } pre .s { color: #A8DBA8; } pre .n { color: #F6C177; } pre .c { color: #8B8F96; }
+  pre.prompt { background: color-mix(in srgb, var(--c) 7%, white); color: var(--ink); font-family: "Segoe UI", system-ui, sans-serif; font-size: 9.1pt; line-height: 1.45; }
+  .ui { font-weight: 650; color: color-mix(in srgb, var(--c) 70%, black); }
+  .kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; font-size: 8.4pt; background: #fff; }
+  .small { font-size: 8.5pt; color: var(--muted); }
+  .tag { display: inline-block; font-size: 7pt; font-weight: 700; padding: 1px 6px; border-radius: 99px; text-transform: uppercase; letter-spacing: .05em; vertical-align: 2px; color: #fff; }
+  .tag.win { background: #0B5CAD; } .tag.web { background: var(--d); }
+
+  /* ---------- Tabellen ---------- */
+  table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 6px 0 11px; font-size: 8.9pt; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 4px 7px; text-align: left; vertical-align: top; border-bottom: 1px solid #ECEEF1; }
+  tr:last-child td { border-bottom: 0; }
+  th { background: var(--c); color: #fff; font-size: 7.9pt; text-transform: uppercase; letter-spacing: .04em; font-weight: 650; }
+  tr:nth-child(even) td { background: #FAFBFC; }
+  tr { break-inside: avoid; }
+
+  /* ---------- Kästen ---------- */
+  .box { border-radius: 10px; padding: 9px 12px 9px 40px; margin: 8px 0 12px; break-inside: avoid; position: relative; background: var(--soft); }
+  .box::before { position: absolute; left: 11px; top: 9px; width: 20px; height: 20px; border-radius: 50%; color: #fff; font-weight: 800; font-size: 10pt; display: flex; align-items: center; justify-content: center; }
+  .box > :first-child { margin-top: 0; } .box > :last-child { margin-bottom: 0; }
+  .box.tip { background: #EAF5EE; } .box.tip::before { content: "✓"; background: #1D7A3C; }
+  .box.warn { background: #FFF4E5; } .box.warn::before { content: "!"; background: #D9822B; }
+  .box.info { background: color-mix(in srgb, var(--c) 9%, white); } .box.info::before { content: "i"; background: var(--c); font-style: italic; font-family: Georgia, serif; }
+  .glance { border-radius: 12px; padding: 10px 14px; margin: 4px 0 12px; background: color-mix(in srgb, var(--c) 8%, white); border: 1px solid color-mix(in srgb, var(--c) 25%, white); break-inside: avoid; }
+  .glance .t { font-size: 7.8pt; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--c); margin-bottom: 4px; }
+  .glance ul { margin: 0; columns: 2; column-gap: 18px; } .glance li { break-inside: avoid; }
+
+  /* ---------- Schritte ---------- */
+  .steps { counter-reset: st; margin: 6px 0 10px; }
+  .step { display: flex; gap: 10px; break-inside: avoid; margin: 6px 0; }
+  .step::before { counter-increment: st; content: counter(st); flex: 0 0 22px; height: 22px; border-radius: 50%; background: var(--c); color: #fff; font-weight: 800; font-size: 9pt; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .step > div { flex: 1; }
+
+  /* ---------- Bildschirmfotos ---------- */
+  .fig { margin: 10px 0 14px; break-inside: avoid; }
+  .fig.side { display: grid; grid-template-columns: var(--iw, 56%) 1fr; gap: 16px; align-items: start; }
+  .win { border-radius: 10px; overflow: hidden; border: 1px solid #CDD1D6; box-shadow: 0 6px 18px rgba(20,24,30,.13), 0 1px 3px rgba(20,24,30,.08); background: #fff; }
+  .win .bar { height: 21px; background: linear-gradient(#F3F4F6, #E8EAED); border-bottom: 1px solid #D5D8DD; display: flex; align-items: center; padding: 0 8px; gap: 5px; font-size: 7.2pt; color: #5B5F66; font-weight: 600; }
+  .win .bar i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .win .bar i:nth-child(1) { background: #FF5F57; } .win .bar i:nth-child(2) { background: #FEBC2E; } .win .bar i:nth-child(3) { background: #28C840; }
+  .win .bar span { margin-left: 8px; }
+  .win.doc { border-radius: 4px; box-shadow: 0 8px 22px rgba(20,24,30,.16); }
+  .shot { position: relative; overflow: hidden; }
+  .shot img { width: 100%; display: block; }
+  .mk { position: absolute; border: 2px solid var(--c); border-radius: 5px; background: color-mix(in srgb, var(--c) 4%, transparent); }
+  .mk b { position: absolute; top: -9px; left: -9px; width: 18px; height: 18px; border-radius: 50%; background: var(--c); color: #fff; font-size: 8.4pt; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px #fff, 0 2px 4px rgba(0,0,0,.25); }
+  .mk.r b { left: auto; right: -9px; }
+  .cap { font-size: 8.3pt; color: var(--muted); margin-top: 6px; text-align: center; }
+  .legend { list-style: none; padding: 0; margin: 2px 0 0; font-size: 8.9pt; line-height: 1.4; }
+  .fig:not(.side) .legend { columns: 2; column-gap: 18px; margin-top: 10px; }
+  .legend li { display: flex; gap: 7px; margin: 0 0 5px; break-inside: avoid; }
+  .legend li > b:first-child { flex: 0 0 18px; height: 18px; border-radius: 50%; background: var(--c); color: #fff; font-size: 8.2pt; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .legend li > span b { color: color-mix(in srgb, var(--c) 70%, black); }
+
+  /* ---------- Diagramme ---------- */
+  .flow { display: flex; align-items: stretch; margin: 10px 0 14px; break-inside: avoid; }
+  .node { flex: 1; border-radius: 10px; padding: 8px 9px; text-align: center; font-size: 8.4pt; background: #fff; border: 2px solid var(--c); box-shadow: 0 3px 10px rgba(20,24,30,.08); }
+  .node b { display: block; font-size: 9.4pt; margin-bottom: 1px; }
+  .node small { color: var(--muted); font-size: 7.8pt; line-height: 1.3; display: block; }
+  .node.fill { background: var(--c); color: #fff; } .node.fill small { color: rgba(255,255,255,.82); }
+  .node .ico { font-size: 15pt; line-height: 1; display: block; margin-bottom: 3px; }
+  .arrow { flex: 0 0 24mm; padding: 0 2mm; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 7pt; color: var(--muted); text-align: center; line-height: 1.2; }
+  .arrow span { font-size: 15pt; color: var(--c); line-height: 1; font-weight: 700; }
+  .chain { display: flex; align-items: center; gap: 0; margin: 10px 0 14px; break-inside: avoid; }
+  .chain .pill { border-radius: 99px; padding: 6px 12px; font-size: 8.4pt; text-align: center; background: color-mix(in srgb, var(--c) 10%, white); border: 1.5px solid var(--c); }
+  .chain .pill b { display: block; font-size: 9pt; color: var(--c); }
+  .chain .pill.end { background: var(--c); color: #fff; } .chain .pill.end b { color: #fff; }
+  .chain .pill.alt { background: #FDECEC; border-color: #C0392B; } .chain .pill.alt b { color: #C0392B; }
+  .chain .to { flex: 0 0 auto; padding: 0 6px; font-size: 7pt; color: var(--muted); text-align: center; line-height: 1.15; }
+  .chain .to::after { content: "→"; display: block; font-size: 13pt; color: var(--c); font-weight: 700; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: 8px 0 12px; }
+  .cards.two { grid-template-columns: repeat(2, 1fr); }
+  .card { border-radius: 10px; padding: 9px 11px; background: #fff; border: 1px solid var(--line); border-top: 4px solid var(--c); break-inside: avoid; box-shadow: 0 2px 8px rgba(20,24,30,.05); }
+  .card .h { font-weight: 750; font-size: 9.6pt; margin-bottom: 2px; }
+  .card p { margin: 0; font-size: 8.7pt; color: #33363C; }
+
+  /* ---------- Titelseite ---------- */
+  .cover { page: cover; height: 297mm; width: 210mm; position: relative; overflow: hidden; color: #fff;
+    background: radial-gradient(120% 80% at 100% 0%, #3A1018 0%, transparent 60%), linear-gradient(160deg, #1B1E25 0%, #0F1115 100%); }
+  .cover .inner { position: absolute; left: 18mm; top: 22mm; right: 18mm; }
+  .cover .k { color: #FF5A63; font-weight: 800; letter-spacing: .16em; font-size: 9pt; text-transform: uppercase; }
+  .cover .title { font-size: 58pt; font-weight: 800; line-height: 1; margin: 6mm 0 4mm; letter-spacing: -.02em; }
+  .cover .title span { color: var(--brand); }
+  .cover .lead { font-size: 13pt; line-height: 1.45; color: #C9CCD2; max-width: 125mm; }
+  .cover .chips { margin-top: 7mm; display: flex; flex-wrap: wrap; gap: 6px; }
+  .cover .chips span { border-radius: 99px; padding: 3px 10px; font-size: 8.4pt; font-weight: 650; color: #fff; }
+  .cover .stack { position: absolute; right: -10mm; bottom: 34mm; width: 150mm; height: 135mm; }
+  .cover .stack .win { position: absolute; border-color: #2C3038; box-shadow: 0 18px 40px rgba(0,0,0,.5); }
+  .cover .stack .w1 { width: 92mm; left: 0; top: 18mm; transform: rotate(-5deg); }
+  .cover .stack .w2 { width: 92mm; left: 50mm; top: 0; transform: rotate(4deg); }
+  .cover .stack .w3 { width: 74mm; left: 30mm; top: 66mm; transform: rotate(-1deg); }
+  .cover .stack .shot { height: 60mm; } .cover .stack .w3 .shot { height: 46mm; }
+  .cover .foot { position: absolute; left: 18mm; right: 18mm; bottom: 14mm; display: flex; gap: 10mm; font-size: 8.4pt; color: #A7ABB3; border-top: 1px solid #343842; padding-top: 4mm; }
+  .cover .foot b { display: block; color: #fff; font-size: 8.8pt; }
+
+  /* ---------- Trennseiten ---------- */
+  .divider { page: divider; height: 297mm; width: 210mm; position: relative; overflow: hidden; color: #fff; break-before: page;
+    background: linear-gradient(150deg, color-mix(in srgb, var(--c) 92%, white) 0%, var(--c) 45%, color-mix(in srgb, var(--c) 70%, black) 100%); }
+  .divider .big { position: absolute; right: -6mm; top: -22mm; font-size: 300pt; font-weight: 900; line-height: 1; color: rgba(255,255,255,.12); }
+  .divider .inner { position: absolute; left: 20mm; right: 20mm; top: 48mm; }
+  .divider .k { font-weight: 800; letter-spacing: .16em; font-size: 10pt; text-transform: uppercase; opacity: .85; }
+  .divider .t { font-size: 36pt; font-weight: 800; line-height: 1.08; margin: 4mm 0 5mm; }
+  .divider .d { font-size: 12.5pt; line-height: 1.45; max-width: 140mm; opacity: .92; }
+  .divider .toc { margin-top: 14mm; border-top: 1px solid rgba(255,255,255,.35); }
+  .divider .toc div { display: flex; gap: 6mm; padding: 3.2mm 0; border-bottom: 1px solid rgba(255,255,255,.2); font-size: 12pt; font-weight: 600; }
+  .divider .toc div span { width: 10mm; opacity: .7; }
+  .divider .who { position: absolute; left: 20mm; bottom: 22mm; font-size: 9.5pt; opacity: .85; }
+  .divider .who b { display: inline-block; background: rgba(255,255,255,.18); border-radius: 99px; padding: 2px 10px; margin-right: 6px; }
+
+  /* ---------- Inhalt ---------- */
+  .toc2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; margin-top: 8px; }
+  .toc2 .grp { border-radius: 12px; padding: 10px 12px; background: color-mix(in srgb, var(--c) 7%, white); border-left: 5px solid var(--c); break-inside: avoid; }
+  .toc2 .grp .h { font-weight: 800; color: var(--c); font-size: 8pt; letter-spacing: .08em; text-transform: uppercase; }
+  .toc2 .grp .n { font-size: 11.5pt; font-weight: 750; margin: 1px 0 5px; }
+  .toc2 .grp div.i { font-size: 9pt; display: flex; gap: 6px; margin: 1px 0; }
+  .toc2 .grp div.i span { width: 18px; color: var(--c); font-weight: 700; }
+</style>
+</head>
+<body>
+
+<!-- ======================= TITELSEITE ======================= -->
+<section class="cover">
+  <div class="inner">
+    <div class="k">Schulungsunterlagen · Version 1.4.0</div>
+    <div class="title">Qwui<span>.</span></div>
+    <div class="lead">Quittungen, Rechnungen, Lager und Online-Shop für Schweizer Fachgeschäfte. Der vollständige Leitfaden durch alle Funktionen, mit Shop-Schnittstelle und lokalem Sprachmodell.</div>
+    <div class="chips">
+      <span style="background:var(--a)">Grundlagen</span><span style="background:var(--b)">Tagesgeschäft</span><span style="background:var(--cc)">Einstellungen</span><span style="background:var(--d)">Online-Shop</span><span style="background:var(--e)">Assistent &amp; KI</span><span style="background:var(--f)">Betrieb</span>
+    </div>
+  </div>
+  <div class="stack pb">
+    <div class="win w1"><div class="bar"><i></i><i></i><i></i><span>Qwui – Belege</span></div><div class="shot"><img src="bilder/b-belege.jpg"></div></div>
+    <div class="win w2"><div class="bar"><i></i><i></i><i></i><span>Qwui – Vorschläge</span></div><div class="shot"><img src="bilder/d-vorschlaege.jpg"></div></div>
+    <div class="win w3"><div class="bar"><i></i><i></i><i></i><span>Qwui – Rechnung</span></div><div class="shot"><img src="bilder/b-rechnung-qr.jpg"></div></div>
+  </div>
+  <div class="foot">
+    <div><b>Stand</b>18. November 2026</div>
+    <div><b>Herausgeber</b>Matthias Kubin, Munot Informatik</div>
+    <div><b>Quellcode</b>github.com/munot-informatik/Qwui · AGPL-3.0</div>
+    <div><b>Beispieldaten</b>erfundene Firma «Billard-Fachgeschäft Muster»</div>
+  </div>
+</section>
+
+<!-- ======================= INHALT ======================= -->
+<section style="break-before: page">
+  <h1 style="border-bottom-color: var(--ink)">Inhalt</h1>
+  <div class="toc2">
+    <div class="grp pa"><div class="h">Teil A</div><div class="n">Grundlagen</div>
+      <div class="i"><span>1</span>Was ist Qwui?</div><div class="i"><span>2</span>Aufbau der App</div><div class="i"><span>3</span>Erste Einrichtung</div></div>
+    <div class="grp pb"><div class="h">Teil B</div><div class="n">Tagesgeschäft</div>
+      <div class="i"><span>4</span>Quittung und Rechnung erstellen</div><div class="i"><span>5</span>Vorschau, PDF und Versand</div><div class="i"><span>6</span>Belege, Zahlungen, Mahnungen</div><div class="i"><span>7</span>Kunden</div><div class="i"><span>8</span>Inventar und Seriennummern</div></div>
+    <div class="grp pc"><div class="h">Teil C</div><div class="n">Einstellungen</div>
+      <div class="i"><span>9</span>Firma</div><div class="i"><span>10</span>E-Mail-Versand</div><div class="i"><span>11</span>Backup und Sicherung</div></div>
+    <div class="grp pd"><div class="h">Teil D</div><div class="n">Online-Shop</div>
+      <div class="i"><span>12</span>So arbeiten Qwui und Shop zusammen</div><div class="i"><span>13</span>Anbindung einrichten</div><div class="i"><span>14</span>Bestellungen bearbeiten</div><div class="i"><span>15</span>API-Referenz</div></div>
+    <div class="grp pe"><div class="h">Teil E</div><div class="n">Assistent und lokales Sprachmodell</div>
+      <div class="i"><span>16</span>Konzept und Sicherheit</div><div class="i"><span>17</span>Lokale Schnittstelle einschalten</div><div class="i"><span>18</span>Lokales Modell mit LM Studio</div><div class="i"><span>19</span>Alternative: Claude Desktop</div><div class="i"><span>20</span>Werkzeuge und HTTP-Schnittstelle</div></div>
+    <div class="grp pf"><div class="h">Teil F</div><div class="n">Betrieb</div>
+      <div class="i"><span>21</span>Datenschutz und Sicherheit</div><div class="i"><span>22</span>Fehlerbehebung</div><div class="i"><span>23</span>Glossar</div><div class="i"><span>24</span>Übungen</div></div>
+  </div>
+
+  <h2 style="color:var(--ink);margin-top:20px">So liest du diese Unterlage</h2>
+  <div class="cards">
+    <div class="card pb"><div class="h">Nummern im Bild</div><p>Jeder Screenshot hat farbige, nummerierte Markierungen. Die Legende daneben erklärt jedes markierte Element.</p></div>
+    <div class="card pa"><div class="h">Farben</div><p>Jeder Teil hat eine eigene Farbe, von Grundlagen (blau) bis Betrieb (orange). So findest du dich im Ausdruck schnell zurecht.</p></div>
+    <div class="card pd"><div class="h">Versionen</div><p><span class="tag win">Windows</span> gibt es nur in der Windows-Version, <span class="tag web">Web</span> nur in der Web-App. Alles andere gibt es in beiden.</p></div>
+  </div>
+  <div class="cards two">
+    <div class="card pc"><div class="h">Für Anwenderinnen und Anwender</div><p>Teil A und B: Verkaufen, Belege, Kunden und Lager. Ohne technische Vorkenntnisse lesbar.</p></div>
+    <div class="card pe"><div class="h">Für Einrichtung und Technik</div><p>Teil C bis F: Einstellungen, Shop- und KI-Anbindung mit Schnittstellen-Referenz, Betrieb und Fehlerbehebung.</p></div>
+  </div>
+  <div class="box info pb"><p>Alle Bildschirmfotos stammen aus Qwui 1.4.0 mit erfundenen Beispieldaten. Die Abläufe wurden echt durchgespielt: Verkauf, Wareneingang, Shop-Bestellung, Assistenten-Vorschlag und automatische Sicherung.</p></div>
+</section>
+
+<!-- ======================= TEIL A ======================= -->
+<section class="divider pa"><div class="big">A</div><div class="inner">
+  <div class="k">Teil A</div><div class="t">Grundlagen</div>
+  <div class="d">Wofür Qwui da ist, wie die App aufgebaut ist und was beim ersten Start zu tun ist.</div>
+  <div class="toc"><div><span>1</span>Was ist Qwui?</div><div><span>2</span>Aufbau der App</div><div><span>3</span>Erste Einrichtung</div></div></div>
+  <div class="who"><b>Für alle</b>Verkauf, Büro, Lager und Einrichtung</div>
+</section>
+
+<section class="pa">
+<h1 class="chapter" style="break-before:auto"><span class="nr">1</span>Was ist Qwui?</h1>
+<p>Qwui ist die Kassen-, Beleg- und Lagersoftware für kleine Schweizer Fachgeschäfte und Dienstleister. Du erstellst damit Quittungen und Rechnungen mit Schweizer QR-Einzahlungsschein, verwaltest Kunden, führst das Lager mit Seriennummern und behältst offene Rechnungen im Blick. Die Windows-Version verbindet zusätzlich den eigenen Online-Shop und einen KI-Assistenten, der auf Wunsch komplett auf dem eigenen PC läuft.</p>
+
+<div class="flow">
+  <div class="node pe"><span class="ico">✦</span><b>Sprachmodell</b><small>lokal (LM Studio) oder Claude Desktop</small></div>
+  <div class="arrow pe"><span>⇄</span>Werkzeuge<br>nur 127.0.0.1</div>
+  <div class="node fill pb"><span class="ico">▣</span><b>Qwui</b><small>Quittungen · Kunden · Lager · Belege</small></div>
+  <div class="arrow pd"><span>⇄</span>HTTPS<br>nur ausgehend</div>
+  <div class="node pd"><span class="ico">🛒</span><b>Online-Shop</b><small>Bestand anzeigen, Bestellungen annehmen</small></div>
+</div>
+
+<h2>Vier Leitgedanken</h2>
+<div class="cards two">
+  <div class="card"><div class="h">Eine Datenbasis</div><p>Kasse, Lager, Belege und Online-Shop nutzen dieselben Daten. Ein Verkauf im Laden senkt den Bestand im Shop, eine Shop-Bestellung wird in Qwui zur Quittung.</p></div>
+  <div class="card"><div class="h">Der Mensch entscheidet</div><p>Online-Bestellungen und Vorschläge des Assistenten bucht Qwui nie selbst. Sie warten unter «Vorschläge» auf deinen Klick.</p></div>
+  <div class="card"><div class="h">Daten bleiben bei dir</div><p>Die Windows-Version speichert alles lokal und ist aus dem Internet nicht erreichbar. Verbindungen gehen nur von Qwui hinaus.</p></div>
+  <div class="card"><div class="h">Nichts verschwindet still</div><p>Jede Lagerbewegung steht im Protokoll. Änderungen an Quittungen werden storniert und neu gebucht.</p></div>
+</div>
+
+<h2>Zwei Versionen, eine Oberfläche</h2>
+<table>
+  <tr><th style="width:24%"></th><th style="width:38%">Web-App <span class="tag web" style="background:rgba(255,255,255,.25)">Web</span></th><th>Windows-Version <span class="tag win" style="background:rgba(255,255,255,.25)">Windows</span></th></tr>
+  <tr><td><b>Läuft</b></td><td>im Browser auf jedem Gerät, als App installierbar (PWA)</td><td>als einzelne <code>Qwui-1.4.0.exe</code>, ohne Installation und Admin-Rechte</td></tr>
+  <tr><td><b>Daten</b></td><td>zentral in Cloudflare D1, Zugang mit Passwort</td><td>lokal in <code>Qwui-Daten\qwui.db</code> neben der exe, auch offline</td></tr>
+  <tr><td><b>Quittungen, Kunden, Belege, Inventar</b></td><td>✓</td><td>✓</td></tr>
+  <tr><td><b>E-Mail mit PDF-Anhang</b></td><td>öffnet das E-Mail-Programm</td><td>✓ direkt per SMTP</td></tr>
+  <tr><td><b>Automatische Sicherung</b></td><td>– (manuelles Backup)</td><td>✓ stündlich und täglich, verschlüsselt</td></tr>
+  <tr><td><b>Online-Shop, Assistent</b></td><td>–</td><td>✓</td></tr>
+  <tr><td><b>Seriennummern aus Fotos</b></td><td>–</td><td>✓ mit der Texterkennung von Windows</td></tr>
+</table>
+<p class="small">Daten lassen sich über eine Backup-Datei von einer Version in die andere übertragen (Kapitel 11).</p>
+
+<h1 class="chapter"><span class="nr">2</span>Aufbau der App</h1>
+<div class="fig side" style="--iw:44%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Neue Quittung</span></div><div class="shot"><img src="bilder/a-einrichten.jpg" style="margin-bottom:-58%"></div></div>
+  <div>
+    <h2 style="margin-top:0">Die Seitenleiste</h2>
+    <p>Links steht immer die Navigation, geteilt in zwei Bereiche.</p>
+    <table>
+      <tr><th>Tagesgeschäft</th><th>Wozu</th></tr>
+      <tr><td class="ui">Neue Quittung</td><td>verkaufen, Quittung oder Rechnung</td></tr>
+      <tr><td class="ui">Vorschläge (n)</td><td>nur wenn etwas offen ist <span class="tag win">Windows</span></td></tr>
+      <tr><td class="ui">Belege</td><td>Belege, Zahlungen, Mahnungen</td></tr>
+      <tr><td class="ui">Kunden</td><td>Kundenliste</td></tr>
+      <tr><td class="ui">Inventar</td><td>Artikel, Wareneingang, Lager</td></tr>
+    </table>
+    <table>
+      <tr><th>Einstellungen</th><th>Wozu</th></tr>
+      <tr><td class="ui">Firma</td><td>Firmendaten, Logo, IBAN</td></tr>
+      <tr><td class="ui">E-Mail</td><td>SMTP-Versand <span class="tag win">Windows</span></td></tr>
+      <tr><td class="ui">Shop</td><td>Online-Shop <span class="tag win">Windows</span></td></tr>
+      <tr><td class="ui">Assistent</td><td>Sprachmodell <span class="tag win">Windows</span></td></tr>
+      <tr><td class="ui">Backup</td><td>Export, Import, Sicherung</td></tr>
+    </table>
+    <p class="small">Auf schmalen Bildschirmen (Telefon) steht die Navigation als Leiste oben. Jede Seite hat oben eine rote Kennzeile und einen Titel.</p>
+  </div>
+</div>
+
+<h2>Die Bausteine im Hintergrund</h2>
+<div class="flow">
+  <div class="node fill"><b>Oberfläche</b><small>dieselbe für Web und Windows</small></div>
+  <div class="arrow"><span>→</span>Speicher-<br>Adapter</div>
+  <div class="node pd"><b>Web: Cloudflare D1</b><small>über <code>/api/storage</code>, mit Passwort</small></div>
+  <div class="arrow"><span>⟷</span>oder</div>
+  <div class="node" style="--c:#0B5CAD"><b>Windows: SQLite</b><small><code>qwui.db</code> neben der exe</small></div>
+</div>
+<p>Beide Speicher haben denselben Aufbau, einen Schlüssel-Wert-Speicher mit Firma, Kunden, Belegen, Inventar, Exemplaren und Lagerbewegungen. Die Windows-Version hat zusätzlich einen Hintergrundprozess: Er versendet E-Mails, sichert, spricht mit dem Shop und stellt die lokale Schnittstelle für den Assistenten bereit.</p>
+
+<h2>Wo die Windows-Version ihre Daten ablegt</h2>
+<table>
+  <tr><th style="width:30%">Im Ordner <code style="background:none;color:#fff">Qwui-Daten\</code></th><th>Inhalt</th></tr>
+  <tr><td><code>qwui.db</code> (+ <code>-wal</code>, <code>-shm</code>)</td><td>die Datenbank mit allen Geschäftsdaten und Vorschlägen</td></tr>
+  <tr><td><code>geheim.bin</code></td><td>Passwörter und Tokens, verschlüsselt mit dem Windows-Konto; auf einem anderen PC nicht lesbar</td></tr>
+  <tr><td><code>logos\</code></td><td>hochgeladene Firmenlogos</td></tr>
+</table>
+<div class="box warn"><p>Den Ordner <code>Qwui-Daten</code> immer zusammen mit der exe verschieben. Es darf nur <b>ein</b> Qwui-Fenster gleichzeitig laufen.</p></div>
+
+<h1 class="chapter"><span class="nr">3</span>Erste Einrichtung</h1>
+<p>Solange etwas fehlt, zeigt Qwui oben auf <span class="ui">Neue Quittung</span> den Hinweis «Noch einzurichten» (siehe Bild in Kapitel 2). Diese Reihenfolge hat sich bewährt:</p>
+<div class="steps">
+  <div class="step"><div><b>Firma</b> (Kapitel 9): Name, Adresse, Kontakt, MWST-Nummer, Logo. Für QR-Rechnungen die IBAN.</div></div>
+  <div class="step"><div><b>E-Mail</b> <span class="tag win">Windows</span> (Kapitel 10): Anbieter wählen, Adresse und Passwort, Test-Mail senden.</div></div>
+  <div class="step"><div><b>Automatische Sicherung</b> <span class="tag win">Windows</span> (Kapitel 11): Cloud-Ordner wählen, Backup-Passwort in den Passwort-Manager.</div></div>
+  <div class="step"><div><b>Inventar</b> (Kapitel 8): Artikel anlegen oder per Excel importieren; hochpreisige Einzelstücke mit Seriennummernpflicht.</div></div>
+  <div class="step"><div><b>Kunden</b> (Kapitel 7): optional vorab, sonst beim ersten Verkauf.</div></div>
+  <div class="step"><div><b>Shop und Assistent</b> <span class="tag win">Windows</span> (Teil D und E): nur wenn gewünscht.</div></div>
+</div>
+<div class="box warn"><p><b>Windows-SmartScreen:</b> Die exe ist nicht kostenpflichtig signiert. Beim ersten Start erscheint «Der Computer wurde durch Windows geschützt». <span class="ui">Weitere Informationen → Trotzdem ausführen</span> ist hier normal.</p></div>
+</section>
+
+<!-- ======================= TEIL B ======================= -->
+<section class="divider pb"><div class="big">B</div><div class="inner">
+  <div class="k">Teil B</div><div class="t">Tagesgeschäft</div>
+  <div class="d">Verkaufen, Belege verwalten, Kunden betreuen und das Lager führen. Jeder Bildschirm Schritt für Schritt erklärt.</div>
+  <div class="toc"><div><span>4</span>Quittung und Rechnung erstellen</div><div><span>5</span>Vorschau, PDF und Versand</div><div><span>6</span>Belege, Zahlungen, Mahnungen</div><div><span>7</span>Kunden</div><div><span>8</span>Inventar, Seriennummern und Lager</div></div></div>
+  <div class="who"><b>Für</b>Verkauf, Büro und Lager</div>
+</section>
+
+<section class="pb">
+<h1 class="chapter" style="break-before:auto"><span class="nr">4</span>Quittung und Rechnung erstellen</h1>
+<div class="glance"><div class="t">Auf einen Blick</div><ul>
+  <li>Kunde suchen oder «Laufkunde» (bis CHF 400)</li><li>Artikel und Seriennummern einfach scannen</li>
+  <li>MWST und QR-Rechnung per Schalter</li><li>Lager bucht beim Erstellen automatisch</li></ul></div>
+<div class="chain">
+  <div class="pill"><b>Kunde</b>suchen oder neu</div><div class="to">dann</div>
+  <div class="pill"><b>Scannen</b>Artikel, Seriennummer</div><div class="to">dann</div>
+  <div class="pill"><b>Prüfen</b>MWST, Rechnung</div><div class="to">dann</div>
+  <div class="pill end"><b>Erstellen</b>Nummer, Lagerbuchung</div><div class="to">dann</div>
+  <div class="pill"><b>Versand</b>E-Mail, Druck</div>
+</div>
+
+<div class="fig side" style="--iw:52%">
+  <div><div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Neue Quittung</span></div><div class="shot" data-shot="b-quittung-form"><img src="bilder/b-quittung-form.jpg"></div></div>
+  <div class="cap">Zwei Scans: Queue mit Seriennummer und ein Pflegeset.</div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Datum</b>: Vorgabe heute (Schweizer Zeit). Für nachträgliche Verkäufe ändern.</span></li>
+    <li><b>2</b><span><b>Kunde</b>: Suche nach Name, Telefon oder E-Mail, <span class="kbd">Enter</span> nimmt den ersten Treffer. «Anderer Kunde» wechselt.</span></li>
+    <li><b>3</b><span><b>Scannen</b>: Seriennummer trägt Artikel <i>und</i> Exemplar ein, Artikelnummer den Artikel (nochmals scannen = Menge +1).</span></li>
+    <li><b>4</b><span><b>Art der Position</b>: Dienstleistung (freier Text, ohne Lager) oder Produkt (aus dem Inventar).</span></li>
+    <li><b>5</b><span><b>Artikel</b> aus dem Inventar, mit Preis und Bestand.</span></li>
+    <li><b>6</b><span><b>Seriennummer</b>: bei S/N-Artikeln Pflicht, sonst wird nicht erstellt.</span></li>
+    <li><b>7</b><span><b>Menge</b> und Rabatt in Prozent; Betrag gilt pro Stück.</span></li>
+    <li><b>8</b><span><b>Position hinzufügen</b> für weitere Zeilen.</span></li>
+    <li><b>9</b><span><b>Mehrwertsteuer</b> 8.1 % einschalten.</span></li>
+    <li><b>10</b><span><b>Total</b> rechnet laufend mit.</span></li>
+    <li><b>11</b><span><b>Rechnung mit QR-Einzahlungsschein</b> statt Quittung.</span></li>
+    <li><b>12</b><span><b>Notiz</b>: erscheint auf dem Beleg.</span></li>
+    <li><b>13</b><span><b>Aufwand für die Buchhaltung</b>: intern, nie auf dem Beleg.</span></li>
+    <li><b>14</b><span><b>Nach dem Erstellen</b>: per E-Mail senden und/oder drucken.</span></li>
+    <li><b>15</b><span><b>Quittung erstellen</b>: vergibt die Nummer und bucht das Lager.</span></li>
+  </ol>
+</div>
+
+<h2>Kunde und Laufkunde</h2>
+<ul>
+  <li><b>Kunde suchen</b>: «079 …» findet auch «+41 79 …». <span class="ui">Neuer Kunde / Adresse eingeben</span> erfasst Name und Adresse direkt; mit <span class="ui">In Kundenliste speichern</span> wird daraus ein Kunde.</li>
+  <li><b>Ohne Kunde</b> geht die Quittung an «Laufkunde», erlaubt bis CHF 400. <b>Ab CHF 400</b> verlangt Art. 958f OR Name und Adresse des Käufers; Qwui weist darauf hin.</li>
+</ul>
+<h2>Scannen</h2>
+<p>Ein Barcode-Scanner verhält sich wie eine Tastatur: Er tippt den Code und drückt Enter. Verkaufte, retournierte oder doppelt gescannte Stücke meldet Qwui sofort unter dem Feld. Bei Artikeln ohne Barcode und für Dienstleistungen füllst du die Positionen von Hand aus.</p>
+
+<h2>Mehrwertsteuer und Rechnung</h2>
+<div class="fig side" style="--iw:54%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Neue Quittung</span></div><div class="shot" data-shot="b-rechnung-detail"><img src="bilder/b-rechnung-detail.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>MWST an</b>: Beträge gelten inklusive 8.1 %.</span></li>
+    <li><b>2</b><span><b>Netto und MWST</b> weist Qwui getrennt aus.</span></li>
+    <li><b>3</b><span><b>Total inkl. MWST</b>.</span></li>
+    <li><b>4</b><span><b>Rechnung an</b>: Aus der QUITTUNG wird eine RECHNUNG mit QR-Zahlteil.</span></li>
+    <li><b>5</b><span><b>Zahlungsfrist</b>, Vorgabe 30 Tage. Danach gilt die Rechnung als überfällig.</span></li>
+  </ol>
+</div>
+<p>Für die Rechnung braucht es unter Firma eine gültige Schweizer oder Liechtensteiner <b>IBAN</b>. Eine QR-IBAN braucht es nicht: Qwui erzeugt eine Referenz nach ISO 11649 (RF…).</p>
+
+<h2>Aufwand für die Buchhaltung</h2>
+<div class="fig side" style="--iw:54%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Neue Quittung</span></div><div class="shot" data-shot="b-aufwand"><img src="bilder/b-aufwand.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Gefahrene Kilometer</b> des Einsatzes.</span></li>
+    <li><b>2</b><span><b>Ansatz</b> aus den Firmendaten (Vorgabe CHF 0.75, ESTV ab 2026).</span></li>
+    <li><b>3</b><span><b>Fahrkosten</b> werden ausgerechnet.</span></li>
+    <li><b>4</b><span><b>Material</b> mit Einkaufspreis.</span></li>
+    <li><b>5</b><span>Weiteres Material hinzufügen.</span></li>
+    <li><b>6</b><span><b>Aufwand total</b> dieses Belegs.</span></li>
+    <li><b>7</b><span>Erscheint <b>nie</b> auf Beleg, PDF, E-Mail, Mahnung, im Shop oder beim Assistenten.</span></li>
+  </ol>
+</div>
+<div class="box tip"><p><b>Alles in einem Schritt:</b> Quittung, Exemplare, Bestand und Lagerbewegungen werden zusammen gespeichert. Bricht das Speichern ab, bleibt alles beim alten Stand. Unter Bestand 0 warnt Qwui, verkauft aber trotzdem.</p></div>
+
+<h1 class="chapter"><span class="nr">5</span>Vorschau, PDF und Versand</h1>
+<p>Nach dem Erstellen und beim Öffnen eines Belegs zeigt Qwui den Beleg so, wie der Kunde ihn bekommt, mit allen Versandwegen darüber.</p>
+<div class="fig side" style="--iw:55%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Quittung Nr. 0001</span></div><div class="shot" data-shot="b-vorschau"><img src="bilder/b-vorschau.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Neue Quittung</b>: zurück zum leeren Formular.</span></li>
+    <li><b>2</b><span><b>Bearbeiten</b>: storniert und bucht neu (Kapitel 6).</span></li>
+    <li><b>3</b><span><b>Löschen</b> mit Rückfrage; Ware geht zurück ins Lager.</span></li>
+    <li><b>4</b><span><b>PDF herunterladen</b>: exakt gesetzt, QR-Teil immer unten.</span></li>
+    <li><b>5</b><span><b>Drucken</b>: Tipp: Kopf- und Fusszeilen im Druckdialog abwählen.</span></li>
+    <li><b>6</b><span><b>Per E-Mail senden</b>: <span class="tag win">Windows</span> direkt mit PDF; <span class="tag web">Web</span> öffnet das E-Mail-Programm.</span></li>
+    <li><b>7</b><span><b>Per WhatsApp</b>: fertiger Text ohne PDF, Chat vorgewählt.</span></li>
+    <li><b>8</b><span><b>Firmenkopf</b> aus den Firmendaten, optional mit Logo.</span></li>
+    <li><b>9</b><span><b>QUITTUNG</b> mit fortlaufender Nummer und Datum.</span></li>
+    <li><b>10</b><span><b>Empfänger</b>.</span></li>
+    <li><b>11</b><span><b>Seriennummer</b> auf dem Beleg, wichtig für die Garantie.</span></li>
+    <li><b>12</b><span><b>Total</b> und «Betrag dankend erhalten».</span></li>
+    <li><b>13</b><span><b>Fusszeile</b>: Adresse, Kontakt, Bankverbindung.</span></li>
+  </ol>
+</div>
+<p class="small">Auf Telefonen gibt es zusätzlich <span class="ui">Teilen</span>: Das PDF geht direkt an WhatsApp, Mail oder andere Apps.</p>
+
+<h2>Die Rechnung mit QR-Einzahlungsschein</h2>
+<div class="fig side" style="--iw:58%">
+  <div class="win doc"><div class="shot" data-shot="b-rechnung-qr"><img src="bilder/b-rechnung-qr.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>RECHNUNG</b> statt Quittung, weil noch nicht bezahlt.</span></li>
+    <li><b>2</b><span><b>Netto und MWST</b> bei MWST-pflichtigen Belegen.</span></li>
+    <li><b>3</b><span><b>Zahlungsfrist</b> im Text.</span></li>
+    <li><b>4</b><span><b>Empfangsschein</b> für die Kundschaft.</span></li>
+    <li><b>5</b><span><b>QR-Code</b> nach Swiss-QR-Standard: IBAN, Betrag, Referenz, Zahler. Jede Banking-App liest ihn.</span></li>
+    <li><b>6</b><span><b>Referenz</b> (RF…, ISO 11649) zum Zuordnen der Zahlung.</span></li>
+    <li><b>7</b><span><b>Zusätzliche Informationen</b>: Rechnungsnummer.</span></li>
+  </ol>
+</div>
+
+<h1 class="chapter"><span class="nr">6</span>Belege, Zahlungen und Mahnungen</h1>
+<div class="fig">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Belege</span></div><div class="shot" data-shot="b-belege"><img src="bilder/b-belege.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Suche</b> über alle Monate: Nummer, Kunde, Artikel oder Seriennummer.</span></li>
+    <li><b>2</b><span><b>Monat und Jahr</b> wählen, wenn nicht gesucht wird.</span></li>
+    <li><b>3</b><span><b>Export zu Excel</b>: alle Belege des Zeitraums als .xlsx, z. B. für die Treuhand.</span></li>
+    <li><b>4</b><span><b>Legende</b>: rot offen, grün bezahlt, Warndreieck überfällig.</span></li>
+    <li><b>5</b><span><b>Grün</b>: Quittung bzw. bezahlt. Mit Öffnen, Bearbeiten, Löschen.</span></li>
+    <li><b>6</b><span><b>Rot</b>: offene Rechnung.</span></li>
+    <li><b>7</b><span><b>Interner Aufwand</b> des Belegs (nur hier sichtbar).</span></li>
+    <li><b>8</b><span><b>Als bezahlt markieren</b>, sobald das Geld da ist.</span></li>
+    <li><b>9</b><span><b>Summen</b>: davon offen, davon bezahlt, Total des Zeitraums.</span></li>
+    <li><b>10</b><span><b>Aufwand intern</b>: Fahrkosten und Material im Zeitraum.</span></li>
+  </ol>
+</div>
+<h2>Überfällige Rechnungen und Mahnung</h2>
+<div class="fig side" style="--iw:60%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Belege · September</span></div><div class="shot" data-shot="b-belege-mahnung"><img src="bilder/b-belege-mahnung.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Warnung</b>, wenn im Zeitraum Fristen abgelaufen sind.</span></li>
+    <li><b>2</b><span><b>Überfällig seit</b> … Tagen.</span></li>
+    <li><b>3</b><span><b>Mahnung erstellen</b>: eigene Mahnungs-PDF mit erneut beigelegtem Einzahlungsschein.</span></li>
+    <li><b>4</b><span>Zahlung eingegangen: <b>als bezahlt markieren</b>.</span></li>
+  </ol>
+</div>
+<div class="cards">
+  <div class="card"><div class="h">Öffnen</div><p>zeigt die Vorschau mit allen Versandwegen.</p></div>
+  <div class="card"><div class="h">Bearbeiten</div><p>Qwui storniert die alte Buchung und bucht neu. Im Lagerprotokoll steht beides.</p></div>
+  <div class="card"><div class="h">Löschen</div><p>fragt nach und bucht die Ware zurück. Die Nummer wird nicht neu vergeben.</p></div>
+</div>
+
+<h1 class="chapter"><span class="nr">7</span>Kunden</h1>
+<div class="fig side" style="--iw:50%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Kunden</span></div><div class="shot" data-shot="b-kunden"><img src="bilder/b-kunden.jpg"></div></div>
+  <div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Neuer Kunde</b> anlegen.</span></li>
+    <li><b>2</b><span><b>Suche</b> nach Name, Ort, Telefon oder E-Mail.</span></li>
+    <li><b>3</b><span><b>Einverständnis «E-Mail-Beleg»</b> mit Datum.</span></li>
+    <li><b>4</b><span><b>Bearbeiten</b>: Name, Adresse, E-Mail, Telefon.</span></li>
+    <li><b>5</b><span><b>Speichern</b> oder Abbrechen.</span></li>
+    <li><b>6</b><span>Bestehende Quittungen behalten die Angaben von damals.</span></li>
+  </ol>
+  <div class="box info"><p><b>Datenschutz:</b> Eine E-Mail-Adresse speichert Qwui nur mit Einverständnis. Ohne dient sie nur dem einen Versand. Wer im Online-Shop «Quittung per E-Mail» anhakt, hat zugestimmt.</p></div>
+  <p class="small">Jeder Kunde hat eine interne Kunden-ID. Der Assistent sieht nur diese ID, nie Namen oder Kontaktdaten.</p>
+  </div>
+</div>
+
+<h1 class="chapter"><span class="nr">8</span>Inventar, Seriennummern und Lager</h1>
+<div class="glance"><div class="t">Auf einen Blick</div><ul>
+  <li>Artikel mit Artikelnummer, Gruppe, Preis</li><li>Einzelstücke mit Seriennummer und Status</li>
+  <li>Wareneingang per Scanner oder Foto</li><li>Etiketten mit Strichcode drucken</li>
+  <li>Garantiefall in Sekunden klären</li><li>Jede Bewegung im Protokoll</li></ul></div>
+<div class="fig">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Inventar</span></div><div class="shot" data-shot="b-inventar"><img src="bilder/b-inventar.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Vier Bereiche</b>: Artikel, Wareneingang, Seriennummer suchen, Lagerbewegungen.</span></li>
+    <li><b>2</b><span><b>Neuer Artikel</b> anlegen.</span></li>
+    <li><b>3</b><span><b>Excel-Import/Export</b> des ganzen Inventars.</span></li>
+    <li><b>4</b><span><b>Suche</b> nach Name, Artikelnummer, Gruppe.</span></li>
+    <li><b>5</b><span><b>Filter</b> nach Produktgruppe.</span></li>
+    <li><b>6</b><span><b>S/N-Pflicht</b>: bei Einzelstücken steht hier «Exemplare».</span></li>
+    <li><b>7</b><span><b>Bearbeiten</b>: Zeilen sind sonst nur zur Ansicht, damit kein Preis aus Versehen ändert.</span></li>
+  </ol>
+</div>
+<div class="box info"><p><b>Produktgruppe mit Schrägstrich:</b> «Pool-Queues / Predator» ergibt im Online-Shop die Kategorie «Pool-Queues» mit Unterkategorie «Predator». Eine <b>Artikelnummer</b> gibt es nur einmal, damit der Scanner eindeutig bleibt. <b>Stückzahl von Hand ändern</b> bucht Qwui als Inventurkorrektur.</p></div>
+
+<h2>Seriennummernpflicht und Exemplare</h2>
+<p>Hochpreisige Einzelstücke (z. B. Queues) bekommen die <b>S/N-Pflicht</b>. Jedes Stück hat dann eine eigene Seriennummer und einen Status, die Stückzahl ergibt sich aus den Exemplaren an Lager. Einschalten geht bei Bestand 0, ausschalten nur ohne erfasste Exemplare.</p>
+<div class="chain">
+  <div class="pill"><b>an Lager</b>verfügbar</div><div class="to">Verkauf</div>
+  <div class="pill end"><b>verkauft</b>mit Quittung</div><div class="to">Rückgabe</div>
+  <div class="pill"><b>retourniert</b>von Hand</div>
+  <div style="flex:1"></div>
+  <div class="pill" style="border-style:dashed"><b>reserviert</b>nicht verfügbar, keine Bewegung</div>
+</div>
+<div class="fig">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Inventar · Exemplare</span></div><div class="shot" data-shot="b-exemplare"><img src="bilder/b-exemplare.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>zu</b>: Exemplarliste einklappen.</span></li>
+    <li><b>2</b><span><b>Etiketten für alle an Lager</b> drucken.</span></li>
+    <li><b>3</b><span><b>Etikettenformat</b>; Qwui merkt sich die Wahl.</span></li>
+    <li><b>4</b><span><b>Status</b> von Hand setzen: reserviert, retourniert.</span></li>
+    <li><b>5</b><span><b>Verkauf</b> mit Link zur Quittung und Kunde.</span></li>
+    <li><b>6</b><span><b>Bemerkung</b> pro Exemplar, z. B. Lieferschein.</span></li>
+  </ol>
+</div>
+
+<h2>Wareneingang</h2>
+<div class="fig">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Inventar · Wareneingang</span></div><div class="shot" data-shot="b-wareneingang"><img src="bilder/b-wareneingang.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Artikelnummer scannen</b>. Unbekannt? Qwui bietet an, den Artikel anzulegen.</span></li>
+    <li><b>2</b><span>Oder den <b>Artikel wählen</b>.</span></li>
+    <li><b>3</b><span><b>Neuer Artikel</b> direkt hier.</span></li>
+    <li><b>4</b><span><b>Seriennummern</b> nacheinander scannen; der Cursor bleibt im Feld. Ohne S/N-Pflicht: Menge.</span></li>
+    <li><b>5</b><span><b>Seriennummern aus Fotos lesen</b> <span class="tag win">Windows</span>.</span></li>
+    <li><b>6</b><span><b>Doppelt</b> oder schon im Lager: sofort rot, wird nicht übernommen.</span></li>
+    <li><b>7</b><span><b>Erfasste Nummern</b>, mit × wieder entfernen.</span></li>
+    <li><b>8</b><span><b>Einkaufspreis</b> pro Stück und <b>Bemerkung</b>.</span></li>
+    <li><b>9</b><span><b>Wareneingang buchen</b>. Danach erscheint «Etiketten drucken».</span></li>
+  </ol>
+</div>
+<div class="cards two">
+  <div class="card"><div class="h">Seriennummern aus Fotos <span class="tag win">Windows</span></div><p>Qwui liest die Fotos mit der Texterkennung von Windows, auf diesem PC und ohne Internet. Jede Nummer erscheint neben ihrem Foto und kommt erst nach «Stimmt, übernehmen» in die Liste. Ähnliche Zeichen wie 0/O und 1/I vergleichen.</p></div>
+  <div class="card"><div class="h">Etiketten mit Strichcode</div><p>Code 128, den auch einfache Scanner lesen. Formate: Etikettendrucker 62 × 29 mm oder 57 × 32 mm, A4-Bogen 3 × 8 (70 × 37 mm). Im Druckdialog 100 % wählen.</p></div>
+</div>
+
+<h2>Seriennummer suchen: der Garantiefall</h2>
+<div class="fig">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Seriennummer suchen</span></div><div class="shot" data-shot="b-seriennummer"><img src="bilder/b-seriennummer.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span>Seriennummer <b>scannen oder eintippen</b>.</span></li>
+    <li><b>2</b><span><b>Status</b> des Exemplars.</span></li>
+    <li><b>3</b><span><b>Etikett drucken</b> mit Format.</span></li>
+    <li><b>4</b><span><b>Eingang</b> und <b>Verkauf</b> mit Datum.</span></li>
+    <li><b>5</b><span>Direkt <b>zur Quittung</b> springen.</span></li>
+    <li><b>6</b><span><b>Kunde</b> des Verkaufs.</span></li>
+  </ol>
+</div>
+
+<h2>Lagerbewegungen</h2>
+<div class="fig">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Lagerbewegungen</span></div><div class="shot" data-shot="b-lagerbewegungen"><img src="bilder/b-lagerbewegungen.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Filter</b> auf einen Artikel.</span></li>
+    <li><b>2</b><span><b>Seriennummer</b> bei Einzelstücken.</span></li>
+    <li><b>3</b><span><b>Typ</b>: Wareneingang, Verkauf, Storno, Inventurkorrektur.</span></li>
+    <li><b>4</b><span><b>Referenz</b>: Link zur Quittung oder Lieferschein.</span></li>
+    <li><b>5</b><span><b>Quelle</b>: App oder Assistent.</span></li>
+  </ol>
+</div>
+
+<h2>Excel-Import und -Export</h2>
+<p>Unter <span class="ui">Excel-Import/Export</span> lässt sich das Inventar herunterladen und wieder einlesen. Spalten in Zeile 1:</p>
+<table>
+  <tr><th>Produktgruppe</th><th>Artikelnummer</th><th>Artikel-Name</th><th>Stückzahl verfügbar</th><th>Preis (CHF)</th><th>Seriennummernpflichtig</th></tr>
+  <tr><td>Zubehör / Kreide</td><td class="mono">ZU-KR-01</td><td>Billard-Kreide blau, 12 Stück</td><td>40</td><td>9.50</td><td>nein</td></tr>
+  <tr><td>Pool-Queues / Predator</td><td class="mono">PQ-PRE-01</td><td>Predator Pool-Queue …</td><td>0</td><td>1290.00</td><td>ja</td></tr>
+</table>
+<p class="small">Geänderte Stückzahlen bucht Qwui als Inventurkorrektur. Bei S/N-Artikeln zählt die Stückzahl-Spalte nicht; Exemplare kommen über den Wareneingang.</p>
+</section>
+
+<!-- ======================= TEIL C ======================= -->
+<section class="divider pc"><div class="big">C</div><div class="inner">
+  <div class="k">Teil C</div><div class="t">Einstellungen</div>
+  <div class="d">Firmendaten, E-Mail-Versand und Datensicherung, einmal sauber eingerichtet.</div>
+  <div class="toc"><div><span>9</span>Firma</div><div><span>10</span>E-Mail-Versand</div><div><span>11</span>Backup und automatische Sicherung</div></div></div>
+  <div class="who"><b>Für</b>die Person, die Qwui einrichtet</div>
+</section>
+
+<section class="pc">
+<h1 class="chapter" style="break-before:auto"><span class="nr">9</span>Firma</h1>
+<div class="fig side" style="--iw:54%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Firma</span></div><div class="shot" data-shot="c-firma"><img src="bilder/c-firma.jpg"></div></div>
+  <div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Firmenlogo</b>: oben links auf jedem Beleg. Wenig Rand wirkt am besten, PNG mit transparentem Hintergrund geht.</span></li>
+    <li><b>2</b><span><b>Name, Adresse, E-Mail, Telefon, MWST-Nummer</b> für Kopf und Fusszeile.</span></li>
+    <li><b>3</b><span><b>Kilometeransatz</b> für den internen Aufwand. Vorgabe CHF 0.75 (ESTV, Wegleitung zum Lohnausweis Rz 52, ab 2026; bis 2025 CHF 0.70). Jede Quittung speichert ihren Ansatz.</span></li>
+    <li><b>4</b><span><b>IBAN</b> für die QR-Rechnung, dazu Zahlungsempfänger und Adresse als einzelne Felder (Swiss-QR-Standard).</span></li>
+    <li><b>5</b><span><b>Sofortprüfung</b>: «✓ Gültige Schweizer IBAN». Eine QR-IBAN lehnt Qwui ab.</span></li>
+    <li><b>6</b><span><b>Firmendaten speichern</b>: ein Knopf für alles. Ungespeicherte Änderungen zeigt Qwui an.</span></li>
+  </ol>
+  </div>
+</div>
+
+<h1 class="chapter"><span class="nr">10</span>E-Mail-Versand <span class="tag win">Windows</span></h1>
+<div class="fig side" style="--iw:50%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – E-Mail</span></div><div class="shot" data-shot="c-email"><img src="bilder/c-email.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Anbieter</b>: Bluewin, Hostpoint, Infomaniak, Gmail, GMX oder «Anderer Anbieter».</span></li>
+    <li><b>2</b><span><b>Server</b>, Verschlüsselung und Port sind vorgegeben.</span></li>
+    <li><b>3</b><span><b>E-Mail-Adresse</b> des Absenders.</span></li>
+    <li><b>4</b><span><b>Passwort</b>: verschlüsselt gespeichert, nie wieder angezeigt.</span></li>
+    <li><b>5</b><span><b>Absender-Name</b>, den die Kundschaft sieht.</span></li>
+    <li><b>6</b><span><b>Speichern</b>.</span></li>
+    <li><b>7</b><span><b>Test-Mail senden</b> prüft alles sofort.</span></li>
+  </ol>
+</div>
+<div class="box warn"><p><b>Gmail</b> verlangt ein App-Passwort. <b>Outlook.com/Hotmail</b> erlaubt seit 2024 keine Passwort-Anmeldung mehr und funktioniert nicht. Bei «Anderer Anbieter»: STARTTLS meist Port 587, SSL/TLS meist Port 465.</p></div>
+<p>Ob der Versand geklappt hat, steht am Beleg. Fehlermeldungen des Mailservers speichert Qwui ohne Adressen.</p>
+
+<h1 class="chapter"><span class="nr">11</span>Backup und automatische Sicherung</h1>
+<div class="fig side" style="--iw:47%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Backup</span></div><div class="shot" data-shot="c-backup"><img src="bilder/c-backup.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Alle Daten exportieren</b>: eine JSON-Datei mit Firma, Kunden, Belegen, Inventar und Lagerbewegungen. Für Web ↔ Windows oder als Kopie.</span></li>
+    <li><b>2</b><span><b>Excel-Auswertung</b> <span class="tag win">Windows</span>: Blätter Kunden, Zahlungen (Ampel), Inventar, Exemplare, Lagerbewegungen, Aufwand.</span></li>
+    <li><b>3</b><span><b>Backup-Datei auswählen</b>: Import mit Vorschau. <b>Ersetzt alles</b>, führt nicht zusammen.</span></li>
+    <li><b>4</b><span><b>Automatisch sichern</b> <span class="tag win">Windows</span> einschalten.</span></li>
+    <li><b>5</b><span><b>Zielordner</b>, am besten einer, den Proton Drive, OneDrive o. ä. in die Cloud abgleicht.</span></li>
+    <li><b>6</b><span><b>Backup-Passwort</b>, mindestens 8 Zeichen, zweimal eingeben.</span></li>
+    <li><b>7</b><span><b>Jetzt sichern</b> sofort.</span></li>
+    <li><b>8</b><span><b>Status</b> der letzten stündlichen und täglichen Sicherung.</span></li>
+  </ol>
+</div>
+<div class="cards">
+  <div class="card"><div class="h">Verschlüsselt</div><p>AES-256-GCM, Schlüssel per scrypt. Ohne Passwort wird nicht gesichert.</p></div>
+  <div class="card"><div class="h">Aufbewahrt</div><p>48 stündliche und 30 tägliche Sicherungen; andere Dateien im Ordner bleiben unberührt.</p></div>
+  <div class="card"><div class="h">Nachgeholt</div><p>War Qwui geschlossen, sichert es kurz nach dem nächsten Start.</p></div>
+</div>
+<div class="box warn"><p><b>Das Backup-Passwort gehört in den Passwort-Manager.</b> Ohne lässt sich keine Sicherung öffnen. Wiederherstellen: <span class="ui">Backup-Datei auswählen</span>, die <code>.qwuibak</code>-Datei wählen, Passwort eingeben. Die Web-App öffnet verschlüsselte Sicherungen nicht.</p></div>
+</section>
+
+<!-- ======================= TEIL D ======================= -->
+<section class="divider pd"><div class="big">D</div><div class="inner">
+  <div class="k">Teil D</div><div class="t">Online-Shop-Anbindung</div>
+  <div class="d">Bestand und Preise gehen von Qwui an den Shop, bezahlte Bestellungen kommen als Vorschlag zurück. Mit technischer Referenz der Schnittstelle.</div>
+  <div class="toc"><div><span>12</span>So arbeiten Qwui und Shop zusammen</div><div><span>13</span>Anbindung einrichten</div><div><span>14</span>Bestellungen bearbeiten</div><div><span>15</span>API-Referenz</div></div></div>
+  <div class="who"><b>Windows</b>Anwender (12–14) und Entwickler (15)</div>
+</section>
+
+<section class="pd">
+<h1 class="chapter" style="break-before:auto"><span class="nr">12</span>So arbeiten Qwui und Shop zusammen</h1>
+<p>Der Online-Shop ist ein eigenes Projekt auf Cloudflare Pages mit eigener Datenbank. <b>Qwui ist die einzige Quelle</b> für Name, Preis und Bestand. Der Shop ergänzt nur, was Qwui nicht kennt: Beschreibung, Marke, Fotos, Empfehlungen. Die Verbindung geht immer von Qwui aus; Qwui bleibt aus dem Internet unerreichbar.</p>
+<div class="flow">
+  <div class="node fill pb"><b>Qwui</b><small>Lager, Quittungen, Vorschläge</small></div>
+  <div class="arrow"><span>→</span>Bestand nach jeder Lagerbewegung</div>
+  <div class="node"><b>Online-Shop</b><small>zeigt Bestand, kassiert über Stripe</small></div>
+  <div class="arrow"><span>←</span>jede Minute: bezahlte Bestellungen</div>
+  <div class="node"><b>Kundschaft</b><small>bestellt, zahlt mit TWINT oder Karte</small></div>
+</div>
+<div class="cards">
+  <div class="card"><div class="h">Qwui → Shop: Bestand</div><p>Artikelnummer, Name, Gruppe, Preis, verfügbare Menge, Status. <b>Nie</b>: Seriennummern, Einkaufspreise, Kunden, Aufwand.</p></div>
+  <div class="card"><div class="h">Shop → Qwui: Bestellungen</div><p>Kunde, Adresse, Artikel, bezahlte Preise, Versand oder Abholung, Zahlungsart. Kartendaten sieht niemand.</p></div>
+  <div class="card"><div class="h">Qwui → Shop: Rückmeldung</div><p>abgeholt, gebucht oder verworfen. Verlorene Meldungen wiederholt Qwui.</p></div>
+</div>
+<div class="fig">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Billard Shop – Startseite (Testbetrieb)</span></div><div class="shot"><img src="bilder/d-shop-startseite.jpg"></div></div>
+  <div class="cap">Der Demo-Shop. Sortiment, Kategorien und Bestand kommen aus Qwui; der gelbe Balken zeigt die Testkasse.</div>
+</div>
+<div class="box info"><p><b>Kein Überverkauf.</b> Zwischen Bestellung und Buchung hält der Shop die Ware selbst zurück: Bezahlte, noch nicht gebuchte Bestellungen und begonnene Kassen (35 Minuten) zieht er vom angezeigten Bestand ab. Erst ein neuerer Feed aus Qwui löst das ab.</p></div>
+
+<h1 class="chapter"><span class="nr">13</span>Shop-Anbindung einrichten <span class="tag win">Windows</span></h1>
+<div class="fig side" style="--iw:56%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Shop</span></div><div class="shot" data-shot="d-shop"><img src="bilder/d-shop.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Datei-Feed</b>: JSON und CSV in einen Ordner, für andere Shopsysteme.</span></li>
+    <li><b>2</b><span><b>Webhook</b> einschalten.</span></li>
+    <li><b>3</b><span><b>Adresse</b> des Shops, beim Qwui-Shop <code>https://…/api/qwui/feed</code>. <code>http://</code> nur für localhost.</span></li>
+    <li><b>4</b><span><b>Token</b> = <code>QWUI_TOKEN</code> des Shops. Verschlüsselt gespeichert.</span></li>
+    <li><b>5</b><span><b>Bestellungen abholen</b>: nur beim Qwui-Shop.</span></li>
+    <li><b>6</b><span><b>Speichern</b>.</span></li>
+    <li><b>7</b><span><b>Jetzt abgleichen</b> schickt sofort.</span></li>
+    <li><b>8</b><span><b>Status</b>: letzter Abgleich mit Anzahl Artikel, letztes Abholen, ausstehende Rückmeldungen, Warnungen.</span></li>
+    <li><b>9</b><span><b>Vorschau</b>: genau das, was der Shop bekommt.</span></li>
+  </ol>
+</div>
+<div class="cards">
+  <div class="card"><div class="h">Wann</div><p>nach jeder Lagerbewegung und Preisänderung, schnelle Änderungen gebündelt (2 s). Unveränderte Feeds werden nicht erneut geschickt.</p></div>
+  <div class="card"><div class="h">Bei Störung</div><p>neue Versuche nach 1, 5 und 15 Minuten. Danach «Jetzt abgleichen».</p></div>
+  <div class="card"><div class="h">Vollständig</div><p>Jeder Feed enthält das ganze Sortiment. Fehlende Artikel blendet der Shop aus.</p></div>
+</div>
+
+<h1 class="chapter"><span class="nr">14</span>Bestellungen bearbeiten</h1>
+<div class="chain">
+  <div class="pill"><b>neu</b>bezahlt im Shop</div><div class="to">Qwui holt ab<br>(jede Minute)</div>
+  <div class="pill"><b>abgeholt</b>Vorschlag in Qwui</div><div class="to">Quittung<br>erstellt</div>
+  <div class="pill end"><b>gebucht</b>Lager gebucht</div><div class="to">oder</div>
+  <div class="pill alt"><b>verworfen</b>Ware frei, Geld zurück</div>
+</div>
+<div class="fig side" style="--iw:58%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Vorschläge</span></div><div class="shot" data-shot="d-vorschlaege"><img src="bilder/d-vorschlaege.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Online-Bestellung</b> mit Kunde, Lieferung, Artikeln, Betrag, Zahlungsart und Bemerkung.</span></li>
+    <li><b>2</b><span><b>Quittung erstellen…</b> öffnet die ausgefüllte Quittung.</span></li>
+    <li><b>3</b><span><b>Verwerfen</b> mit Rückfrage.</span></li>
+    <li><b>4</b><span><b>Neuer Artikel</b> vom Assistenten (Teil E).</span></li>
+    <li><b>5</b><span><b>Übernehmen</b> bucht den Vorschlag.</span></li>
+    <li><b>6</b><span><b>Wareneingang</b> vom Assistenten.</span></li>
+    <li><b>7</b><span><b>Erledigte Vorschläge</b> zum Nachschauen.</span></li>
+  </ol>
+</div>
+<div class="fig side" style="--iw:52%">
+  <div><div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Quittung zur Online-Bestellung</span></div><div class="shot" data-shot="d-bestellung-quittung"><img src="bilder/d-bestellung-quittung.jpg"></div></div></div>
+  <div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Hinweis</b>: Erst «Quittung erstellen» bucht das Lager und schliesst die Bestellung ab. Darunter, was noch zu tun ist.</span></li>
+    <li><b>2</b><span><b>Abbrechen</b>: Die Bestellung bleibt offen.</span></li>
+    <li><b>3</b><span><b>Kunde</b> mit Adresse aus der Bestellung.</span></li>
+    <li><b>4</b><span><b>Exemplar wählen</b> oder scannen (rot = fehlt noch). S/N-Artikel stehen einzeln da.</span></li>
+    <li><b>5</b><span><b>Notiz</b> mit Bestellnummer, Zahlungsart, Lieferart und Bemerkung.</span></li>
+    <li><b>6</b><span><b>E-Mail</b> ist vorgewählt, wenn die Kundin die Quittung per E-Mail wollte.</span></li>
+  </ol>
+  <div class="box info"><p>Weicht der bezahlte Preis vom Inventarpreis ab, übernimmt Qwui den bezahlten Preis und weist darauf hin. Ein Artikel, den es im Inventar nicht gibt, kommt als Dienstleistung ohne Lagerbuchung. Versandkosten stehen als eigene Position.</p></div>
+  <h3>Verwerfen</h3>
+  <div class="win" style="margin:4px 0 6px"><div class="shot" data-shot="d-verwerfen"><img src="bilder/d-verwerfen.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span>Zweiter Klick nötig: <b>Wirklich verwerfen</b>.</span></li>
+    <li><b>2</b><span>Hinweis: Das Geld erstattest du im Zahlungsdienst (Stripe).</span></li>
+    <li><b>3</b><span><b>Abbrechen</b>.</span></li>
+  </ol>
+  </div>
+</div>
+<div class="cards two">
+  <div class="card"><div class="h">Zuverlässig</div><p>Qwui meldet «abgeholt» erst nach dem Speichern. Ist der Shop nicht erreichbar, warten Rückmeldungen in einer Warteschlange. Listet der Shop eine schon entschiedene Bestellung, meldet Qwui die Entscheidung erneut.</p></div>
+  <div class="card"><div class="h">Fehlerhafte Bestellungen</div><p>Ohne gültige Menge oder Preis überspringt Qwui die Bestellung und meldet sie unter Einstellungen → Shop. Die übrigen kommen trotzdem an.</p></div>
+</div>
+
+<h1 class="chapter"><span class="nr">15</span>API-Referenz Shop-Schnittstelle</h1>
+<p>Was ein Shop anbieten muss, damit Qwui mit ihm arbeitet. Der Qwui-Shop setzt genau das um; ein anderes Shopsystem kann es nachbauen.</p>
+<div class="cards">
+  <div class="card"><div class="h">Adressen</div><p>Basis = Webhook-Adresse ohne <code>/api/qwui/feed</code>.</p></div>
+  <div class="card"><div class="h">Anmeldung</div><p><code>Authorization: Bearer &lt;QWUI_TOKEN&gt;</code>, mind. 16 Zeichen, Vergleich in konstanter Zeit.</p></div>
+  <div class="card"><div class="h">Format</div><p>JSON in UTF-8, Beträge in Franken. Keine Weiterleitungen, 15 s Zeitlimit.</p></div>
+</div>
+<table>
+  <tr><th style="width:34%">Endpunkt</th><th>Zweck</th></tr>
+  <tr><td><code>POST /api/qwui/feed</code></td><td>Qwui schickt den vollständigen Bestand</td></tr>
+  <tr><td><code>GET /api/qwui/orders</code></td><td>Qwui holt bezahlte, noch nicht entschiedene Bestellungen</td></tr>
+  <tr><td><code>POST /api/qwui/orders/{id}</code></td><td>Qwui meldet den Status einer Bestellung</td></tr>
+</table>
+<h2>POST /api/qwui/feed</h2>
+<pre>{ <span class="k">"version"</span>: <span class="n">1</span>, <span class="k">"generatedAt"</span>: <span class="s">"2026-11-18T15:36:58.425Z"</span>,
+  <span class="k">"items"</span>: [
+    { <span class="k">"articleNumber"</span>: <span class="s">"ZU-KR-01"</span>, <span class="k">"name"</span>: <span class="s">"Billard-Kreide blau, 12 Stück"</span>,
+      <span class="k">"group"</span>: <span class="s">"Zubehör / Kreide"</span>, <span class="k">"price"</span>: <span class="n">9.5</span>, <span class="k">"available"</span>: <span class="n">37</span>, <span class="k">"status"</span>: <span class="s">"verfügbar"</span> },
+    { <span class="k">"articleNumber"</span>: <span class="s">"PQ-PRE-01"</span>, <span class="k">"name"</span>: <span class="s">"Predator Pool-Queue, Ahorn mit Carbon-Oberteil"</span>,
+      <span class="k">"group"</span>: <span class="s">"Pool-Queues / Predator"</span>, <span class="k">"price"</span>: <span class="n">1290</span>, <span class="k">"available"</span>: <span class="n">0</span>, <span class="k">"status"</span>: <span class="s">"ausverkauft"</span> } ] }
+<span class="c">→ Antwort</span>  { <span class="k">"ok"</span>: <span class="n">true</span>, <span class="k">"items"</span>: <span class="n">48</span>, <span class="k">"skipped"</span>: <span class="n">0</span> }</pre>
+<p class="small">Übernommen werden Artikel mit Artikelnummer und Preis über 0, Doppelte übersprungen. <code>version</code> muss 1 sein. Ein Feed, der älter ist als der zuletzt angenommene, wird ignoriert.</p>
+<h2>GET /api/qwui/orders</h2>
+<pre>{ <span class="k">"ok"</span>: <span class="n">true</span>, <span class="k">"orders"</span>: [{
+  <span class="k">"id"</span>: <span class="s">"ea858311-bcd2-4ea9-8fec-777708196753"</span>, <span class="k">"number"</span>: <span class="n">1</span>,
+  <span class="k">"createdAt"</span>: <span class="s">"2026-11-18T15:37:20Z"</span>, <span class="k">"paidAt"</span>: <span class="s">"2026-11-18T15:37:21Z"</span>,
+  <span class="k">"payment"</span>: <span class="s">"testkasse"</span>,  <span class="c">// stripe | testkasse</span>     <span class="k">"paymentMethod"</span>: <span class="s">"twint"</span>,  <span class="c">// twint | card</span>
+  <span class="k">"qwuiStatus"</span>: <span class="n">null</span>,       <span class="c">// null | "abgeholt"</span>    <span class="k">"delivery"</span>: <span class="s">"abholung"</span>,    <span class="c">// versand | abholung</span>
+  <span class="k">"note"</span>: <span class="s">"Hole es am Samstag ab."</span>,
+  <span class="k">"customer"</span>: { <span class="k">"name"</span>: <span class="s">"Lea Brunner"</span>, <span class="k">"email"</span>: <span class="s">"lea.brunner@example.ch"</span>, <span class="k">"phone"</span>: <span class="s">"079 444 55 66"</span>,
+                <span class="k">"street"</span>: <span class="s">"Mühlentalstrasse"</span>, <span class="k">"houseNumber"</span>: <span class="s">"20"</span>, <span class="k">"postalCode"</span>: <span class="s">"8200"</span>,
+                <span class="k">"city"</span>: <span class="s">"Schaffhausen"</span>, <span class="k">"receiptByEmail"</span>: <span class="n">true</span> },
+  <span class="k">"items"</span>: [ { <span class="k">"articleNumber"</span>: <span class="s">"PQ-PRE-01"</span>, <span class="k">"name"</span>: <span class="s">"Predator Pool-Queue …"</span>, <span class="k">"quantity"</span>: <span class="n">1</span>, <span class="k">"price"</span>: <span class="n">1290</span> },
+             { <span class="k">"articleNumber"</span>: <span class="s">"ZU-KR-02"</span>, <span class="k">"name"</span>: <span class="s">"Premium-Kreide blau, 1 Stück"</span>, <span class="k">"quantity"</span>: <span class="n">2</span>, <span class="k">"price"</span>: <span class="n">34</span> } ],
+  <span class="k">"shipping"</span>: <span class="n">0</span>, <span class="k">"total"</span>: <span class="n">1358</span> }] }</pre>
+<p class="small">Nur Bestellungen mit Status «bezahlt» und <code>qwuiStatus</code> leer oder «abgeholt». Enthält Namen und Adressen, deshalb nur mit Token. Qwui prüft jede Position: Menge ganzzahlig 1–999, Preis vorhanden.</p>
+<h2>POST /api/qwui/orders/{id}</h2>
+<pre>{ <span class="k">"status"</span>: <span class="s">"abgeholt"</span> }
+{ <span class="k">"status"</span>: <span class="s">"gebucht"</span>, <span class="k">"bookedAt"</span>: <span class="s">"2026-11-18T15:39:02Z"</span> }
+{ <span class="k">"status"</span>: <span class="s">"verworfen"</span> }</pre>
+<p class="small"><code>bookedAt</code> ist bei «gebucht» Pflicht: Bis ein neuerer Feed ankommt, hält der Shop die Menge zurück. Übergänge: «abgeholt» nur von leer; «gebucht» und «verworfen» von leer, «abgeholt» oder demselben Status.</p>
+<h2>Antwortcodes</h2>
+<table>
+  <tr><th style="width:14%">Code</th><th>Bedeutung</th><th style="width:38%">Was Qwui macht</th></tr>
+  <tr><td><b>200</b></td><td>ok; Wiederholung desselben Status: <code>{"ok":true,"unchanged":true}</code></td><td>Eintrag aus der Warteschlange entfernen</td></tr>
+  <tr><td><b>400</b></td><td>ungültige Anfrage</td><td>Fehler im Status anzeigen</td></tr>
+  <tr><td><b>401</b></td><td>Token fehlt oder falsch</td><td>«Der Shop lehnt das Token ab.»</td></tr>
+  <tr><td><b>404</b></td><td>unbekannte Bestellung</td><td>Rückmeldung gilt als erledigt</td></tr>
+  <tr><td><b>409</b></td><td>schon anders entschieden</td><td>Rückmeldung gilt als erledigt</td></tr>
+  <tr><td><b>503</b></td><td><code>QWUI_TOKEN</code> im Shop fehlt oder zu kurz</td><td>neuer Versuch beim nächsten Mal</td></tr>
+  <tr><td><b>5xx / Netz</b></td><td>Shop gestört</td><td>Feed: 1/5/15 Min.; Rückmeldungen bleiben in der Warteschlange</td></tr>
+</table>
+<div class="box info"><p><b>Der Qwui-Shop</b> (eigenes, nicht öffentliches Projekt) bietet zusätzlich: Verwaltung unter <code>/admin</code> mit eigenem <code>ADMIN_TOKEN</code>; Stripe Checkout mit TWINT und Karte oder eine Testkasse; Preise kommen immer aus der Datenbank, nie vom Browser; mit <code>SITE_PASSWORD</code> verlangt er vor dem Start ein Passwort vor jeder Seite. Qwui-Schnittstelle, Verwaltungs-API und Stripe-Webhook brauchen es nicht.</p></div>
+</section>
+
+<!-- ======================= TEIL E ======================= -->
+<section class="divider pe"><div class="big">E</div><div class="inner">
+  <div class="k">Teil E</div><div class="t">Assistent und lokales Sprachmodell</div>
+  <div class="d">Ein Sprachmodell fragt Qwui ab und legt Entwürfe an. Auf Wunsch läuft es komplett auf dem eigenen PC, ohne Cloud und ohne Abo.</div>
+  <div class="toc"><div><span>16</span>Konzept und Sicherheit</div><div><span>17</span>Lokale Schnittstelle einschalten</div><div><span>18</span>Lokales Modell mit LM Studio</div><div><span>19</span>Alternative: Claude Desktop</div><div><span>20</span>Werkzeuge und HTTP-Schnittstelle</div></div></div>
+  <div class="who"><b>Windows</b>Einrichtung und Entwickler</div>
+</section>
+
+<section class="pe">
+<h1 class="chapter" style="break-before:auto"><span class="nr">16</span>Konzept: Assistent mit Sicherheitsgurt</h1>
+<p>Mit dem Assistenten fragst du Qwui in normaler Sprache: «Wie viele Predator-Queues haben wir noch?», «Was lief diesen Monat am besten?», «Erfasse 24 Kreiden vom Lieferschein 5120.» Das Sprachmodell nutzt dafür acht Werkzeuge, die Qwui bereitstellt.</p>
+<div class="flow">
+  <div class="node"><span class="ico">✦</span><b>Sprachmodell</b><small>LM Studio (lokal) oder Claude Desktop</small></div>
+  <div class="arrow"><span>⇄</span>MCP<br>(stdio)</div>
+  <div class="node"><span class="ico">⚙</span><b>Qwui-Assistent-Server</b><small>kleines Node-Programm, 8 Werkzeuge</small></div>
+  <div class="arrow"><span>⇄</span>HTTP + Token<br>127.0.0.1:47110</div>
+  <div class="node fill"><span class="ico">▣</span><b>Qwui (Windows)</b><small>Schnittstelle, Protokoll, Vorschläge</small></div>
+</div>
+<div class="cards two">
+  <div class="card"><div class="h">MCP</div><p>Model Context Protocol: offener Standard, über den Sprachmodell-Programme Werkzeuge nutzen. LM Studio, Claude Desktop und viele andere verstehen ihn.</p></div>
+  <div class="card"><div class="h">Qwui-Assistent-Server</div><p>bietet die Werkzeuge per MCP an und reicht jede Anfrage an Qwui weiter. Steckt in der Datei <code>Qwui-Assistent.mcpb</code>, die Qwui erzeugt.</p></div>
+</div>
+<h2>Die vier Sicherungen</h2>
+<div class="cards two">
+  <div class="card"><div class="h">① Nur Entwürfe</div><p>Schreibende Werkzeuge legen nur Vorschläge an. Gebucht wird erst mit «Übernehmen», mit Quelle «Assistent» im Protokoll. Verkaufen, löschen, Preise ändern: unmöglich.</p></div>
+  <div class="card"><div class="h">② Datensparsam</div><p>Keine Namen, Adressen, E-Mails, Telefonnummern, nur Kunden-IDs. Einkaufspreise und Aufwand sind nicht abrufbar.</p></div>
+  <div class="card"><div class="h">③ Nur dieser PC</div><p>Standardmässig aus, nur 127.0.0.1, mit Token. Anfragen aus dem Browser und unter fremdem Hostnamen werden abgewiesen.</p></div>
+  <div class="card"><div class="h">④ Nachvollziehbar</div><p>Jeder Zugriff steht mit Zeit, Werkzeug und Ergebnis im Protokoll.</p></div>
+</div>
+<div class="box warn"><p><b>Lokal oder Cloud?</b> Mit einem lokalen Modell (Kapitel 18) bleiben alle Daten auf dem PC, auch offline. Mit Claude Desktop (Kapitel 19) gehen die Werkzeug-Ergebnisse, also Geschäftszahlen wie Bestand und Umsatz, an Anthropic. Kundennamen gibt Qwui in beiden Fällen nicht heraus.</p></div>
+
+<h1 class="chapter"><span class="nr">17</span>Lokale Schnittstelle einschalten <span class="tag win">Windows</span></h1>
+<div class="fig side" style="--iw:55%">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><span>Qwui – Assistent</span></div><div class="shot" data-shot="e-assistent"><img src="bilder/e-assistent.jpg"></div></div>
+  <ol class="legend">
+    <li><b>1</b><span><b>Datenschutz</b>-Hinweis: was der Assistent sieht und was nicht.</span></li>
+    <li><b>2</b><span><b>Einschalten</b>. Standardmässig aus.</span></li>
+    <li><b>3</b><span><b>Port</b>, Vorgabe 47110.</span></li>
+    <li><b>4</b><span><b>Status</b>: «läuft auf 127.0.0.1:47110».</span></li>
+    <li><b>5</b><span><b>Zugriffstoken</b> (hier abgedeckt): wie ein Passwort behandeln.</span></li>
+    <li><b>6</b><span><b>Kopieren</b> und <b>Erneuern</b> (macht das alte sofort ungültig).</span></li>
+    <li><b>7</b><span><b>In Claude Desktop installieren</b> oder <b>Datei speichern</b> (.mcpb für LM Studio).</span></li>
+    <li><b>8</b><span><b>Manuell einrichten</b>: fertiger Konfigurationseintrag.</span></li>
+    <li><b>9</b><span><b>Protokoll</b> der letzten 100 Zugriffe, auch abgewiesene.</span></li>
+  </ol>
+</div>
+
+<h1 class="chapter"><span class="nr">18</span>Lokales Sprachmodell mit LM Studio</h1>
+<p>LM Studio führt Sprachmodelle direkt auf dem PC aus und nutzt ab Version 0.3.17 MCP-Werkzeuge. So arbeitet der Assistent ohne Cloud, ohne Abo und offline.</p>
+<div class="chain">
+  <div class="pill"><b>1 · Qwui</b>Schnittstelle an,<br>.mcpb speichern</div><div class="to"></div>
+  <div class="pill"><b>2 · Entpacken</b>server\index.mjs</div><div class="to"></div>
+  <div class="pill"><b>3 · Modell</b>laden, 8192 Token</div><div class="to"></div>
+  <div class="pill"><b>4 · mcp.json</b>Pfad und Token</div><div class="to"></div>
+  <div class="pill end"><b>5 · Fragen</b>im Chat</div>
+</div>
+<table>
+  <tr><th style="width:30%">Du brauchst</th><th>Wozu, woher</th></tr>
+  <tr><td>Windows-PC, 16 GB RAM empfohlen</td><td>Qwui und Modell laufen gleichzeitig; mit 8 GB ein kleineres Modell</td></tr>
+  <tr><td>LM Studio ab 0.3.17</td><td>führt das Modell aus, spricht MCP (lmstudio.ai)</td></tr>
+  <tr><td>Node.js (LTS)</td><td>startet den Assistent-Server (nodejs.org); Probe: <code>node -v</code></td></tr>
+  <tr><td>Modell mit Werkzeug-Aufrufen</td><td><b>Qwen3 8B</b> (Q4, ca. 5 GB) bei 16 GB RAM, <b>Qwen3 4B</b> bei 8 GB. Grössere Modelle rufen Werkzeuge zuverlässiger auf.</td></tr>
+</table>
+<div class="steps">
+  <div class="step"><div>In Qwui unter Assistent <span class="ui">Datei speichern</span>, z. B. nach <code>C:\Qwui\Qwui-Assistent.mcpb</code>.</div></div>
+  <div class="step"><div>Die Datei ist ein ZIP-Archiv: in <code>Qwui-Assistent.zip</code> umbenennen und nach <code>C:\Qwui\assistent</code> entpacken. Darin liegt <code>server\index.mjs</code>, ohne weitere Abhängigkeiten.</div></div>
+  <div class="step"><div>In LM Studio das Modell herunterladen und mit <b>Kontextlänge mindestens 8192 Token</b> laden; die Werkzeugbeschreibungen brauchen Platz.</div></div>
+  <div class="step"><div>Reiter <span class="ui">Program → Install → Edit mcp.json</span>, Eintrag einfügen, Token einsetzen, speichern. Doppelte Backslashes im Pfad.</div></div>
+</div>
+<pre>{ <span class="k">"mcpServers"</span>: {
+    <span class="k">"qwui"</span>: {
+      <span class="k">"command"</span>: <span class="s">"node"</span>,
+      <span class="k">"args"</span>: [<span class="s">"C:\\Qwui\\assistent\\server\\index.mjs"</span>],
+      <span class="k">"env"</span>: { <span class="k">"QWUI_API_URL"</span>: <span class="s">"http://127.0.0.1:47110"</span>,
+               <span class="k">"QWUI_API_TOKEN"</span>: <span class="s">"HIER-DAS-TOKEN-AUS-QWUI"</span> } } } }</pre>
+<p>LM Studio startet den Server selbst. Bei Werkzeug-Aufrufen fragt LM Studio nach; «immer erlauben» lässt es durchlaufen (änderbar unter App Settings → Tools &amp; Integrations).</p>
+<h2>Systemprompt</h2>
+<pre class="prompt">Du bist der Assistent des Fachgeschäfts «Billard-Fachgeschäft Muster». Du arbeitest mit der Software Qwui über die Werkzeuge des Servers «qwui». Antworte auf Deutsch (Schweiz), kurz und mit konkreten Zahlen.
+Regeln:
+- Fragen zu Artikeln, Bestand, Seriennummern, Umsatz, Ladenhütern und Sicherungen beantwortest du immer mit einem Werkzeug, nie aus dem Gedächtnis. Erfinde keine Zahlen.
+- Neue Artikel und Wareneingänge legst du mit «artikel_vorschlagen» bzw. «wareneingang_vorschlagen» an. Das sind nur Vorschläge: Sag danach, dass sie in Qwui unter «Vorschläge» mit «Übernehmen» gebucht werden.
+- Du siehst keine Namen, Adressen oder E-Mails von Kunden, nur Kunden-Nummern.
+- Datumsangaben als TT.MM.JJJJ, Beträge als «CHF 1'290.00». Heute ist der [Datum einsetzen].</pre>
+<div class="box info"><p>Ein lokales Modell kennt das heutige Datum nicht. Für Umsatzfragen den Zeitraum nennen oder das Datum im Systemprompt eintragen.</p></div>
+<h2>Beispiel-Prompts</h2>
+<table>
+  <tr><th style="width:47%">Du fragst</th><th>Werkzeug → Ergebnis (Demo-Daten)</th></tr>
+  <tr><td><i>Welche Queues haben wir, und wie viele sind verfügbar?</i></td><td><code>artikel_suchen</code> → Liste mit Mengen</td></tr>
+  <tr><td><i>Wie viele PQ-PRE-01 sind an Lager, mit welchen Seriennummern?</i></td><td><code>bestand_abfragen</code> → Stückzahl und Seriennummern</td></tr>
+  <tr><td><i>An wen ging die Queue PR-2401, und wann?</i></td><td><code>seriennummer_suchen</code> → 18.11.2026, Quittung 0001, Kunden-ID (kein Name)</td></tr>
+  <tr><td><i>Wie viel Umsatz vom 1. bis 30. November 2026? Was lief am besten?</i></td><td><code>umsatz_auswerten</code> → Summe, Anzahl, offene Rechnungen, Top 10</td></tr>
+  <tr><td><i>Welche Artikel liegen seit über 90 Tagen ohne Verkauf?</i></td><td><code>ladenhueter</code></td></tr>
+  <tr><td><i>Lege an: Queue-Etui Leder, schwarz, KO-06, Köcher &amp; Koffer / Köcher, 94.90 Fr., mit Shop-Text.</i></td><td><code>artikel_vorschlagen</code> → Vorschlag in Qwui</td></tr>
+  <tr><td><i>Wareneingang: zwei PQ-PRE-02, Seriennummern PL-3104 und PL-3105, je 357 Fr., Lieferschein 5133.</i></td><td><code>wareneingang_vorschlagen</code> → Vorschlag in Qwui</td></tr>
+  <tr><td><i>Wann wurde zuletzt gesichert?</i></td><td><code>backup_status</code></td></tr>
+</table>
+
+<h1 class="chapter cont"><span class="nr">19</span>Alternative: Claude Desktop</h1>
+<p>Claude ist deutlich leistungsfähiger als kleine lokale Modelle; die Werkzeug-Ergebnisse gehen dafür an Anthropic.</p>
+<div class="steps">
+  <div class="step"><div>Claude Desktop auf demselben PC installieren und anmelden.</div></div>
+  <div class="step"><div>In Qwui <span class="ui">In Claude Desktop installieren</span>, in Claude Desktop <span class="ui">Installieren</span> bestätigen. Adresse und Token sind eingetragen, Node.js ist nicht nötig.</div></div>
+  <div class="step"><div>Probe: «Wie viele Predator-Queues haben wir an Lager?»</div></div>
+</div>
+<p class="small">Öffnet sich Claude Desktop nicht: <span class="ui">Datei speichern</span> und die .mcpb per Doppelklick oder unter Einstellungen → Erweiterungen installieren. Die Erweiterung ist nicht signiert; die temporäre Datei mit Token löscht Qwui nach zehn Minuten.</p>
+
+<h1 class="chapter"><span class="nr">20</span>Werkzeuge und HTTP-Schnittstelle</h1>
+<table>
+  <tr><th style="width:24%">Werkzeug</th><th style="width:30%">Parameter</th><th>Ergebnis</th></tr>
+  <tr><td><code>artikel_suchen</code> <span class="small">lesend</span></td><td><code>suche</code>, <code>gruppe</code></td><td>Artikelnummer, Name, Gruppe, Preis, S/N-Pflicht, verfügbare Menge</td></tr>
+  <tr><td><code>bestand_abfragen</code> <span class="small">lesend</span></td><td><code>artikel</code> (Nummer oder Name)</td><td>verfügbare Menge, Exemplare an Lager; mehrdeutig: Kandidaten</td></tr>
+  <tr><td><code>seriennummer_suchen</code> <span class="small">lesend</span></td><td><code>seriennummer</code></td><td>Status, Eingang, Verkauf, Quittung, Kunden-ID, retourniert</td></tr>
+  <tr><td><code>umsatz_auswerten</code> <span class="small">lesend</span></td><td><code>von</code>, <code>bis</code> (JJJJ-MM-TT), <code>gruppe</code></td><td>Summe, Anzahl Quittungen, offene Rechnungen, Top-10-Artikel</td></tr>
+  <tr><td><code>ladenhueter</code> <span class="small">lesend</span></td><td><code>tage</code> (Vorgabe 90)</td><td>lange gelagerte Exemplare, Artikel ohne Verkauf</td></tr>
+  <tr><td><code>backup_status</code> <span class="small">lesend</span></td><td>–</td><td>letzte stündliche und tägliche Sicherung</td></tr>
+  <tr><td><code>wareneingang_vorschlagen</code> <span class="small">Entwurf</span></td><td><code>artikel</code>, <code>menge</code> oder <code>seriennummern[]</code>, <code>einkaufspreis</code>, <code>bemerkung</code></td><td>Vorschlag «Wareneingang»</td></tr>
+  <tr><td><code>artikel_vorschlagen</code> <span class="small">Entwurf</span></td><td><code>name</code>, <code>preis</code>, <code>gruppe</code>, <code>artikelnummer</code>, <code>seriennummernpflichtig</code>, <code>shop_text</code></td><td>Vorschlag «Neuer Artikel»</td></tr>
+</table>
+<h2>Direkt per HTTP (für Entwickler)</h2>
+<p>Eigene Programme auf demselben PC können die Schnittstelle direkt nutzen: <code>GET /v1/health</code> und <code>POST /v1/tools/&lt;werkzeug&gt;</code> mit den Parametern als JSON.</p>
+<pre><span class="c"># PowerShell</span>
+$h = @{ Authorization = <span class="s">"Bearer $env:QWUI_API_TOKEN"</span> }
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:47110/v1/tools/umsatz_auswerten `
+  -Headers $h -ContentType <span class="s">"application/json; charset=utf-8"</span> -Body <span class="s">'{"von":"2026-11-01","bis":"2026-11-30"}'</span>
+<span class="c">→ { "ok": true, "result": { "receiptCount": 3, "total": 2095.5, "openInvoices": 729, "topArticles": [ … ] } }</span></pre>
+<table>
+  <tr><th style="width:42%">Fall</th><th>Antwort</th></tr>
+  <tr><td>ohne oder mit falschem Token</td><td>401, im Protokoll</td></tr>
+  <tr><td>mit <code>Origin</code>-Header (aus einem Browser)</td><td>403: keine Webseite kommt über den Browser an Qwui</td></tr>
+  <tr><td>Host nicht <code>127.0.0.1</code>/<code>localhost</code> mit eigenem Port</td><td>abgewiesen (Schutz vor DNS-Rebinding)</td></tr>
+  <tr><td>unbekannter Pfad, Body über 64 KB</td><td>404, 413</td></tr>
+</table>
+<p class="small">Text mit Umlauten als UTF-8 senden, sonst wird aus «Köcher» «K?cher».</p>
+</section>
+
+<!-- ======================= TEIL F ======================= -->
+<section class="divider pf"><div class="big">F</div><div class="inner">
+  <div class="k">Teil F</div><div class="t">Betrieb</div>
+  <div class="d">Datenschutz auf einen Blick, Hilfe bei Problemen, die wichtigsten Begriffe und Übungen für die Schulung.</div>
+  <div class="toc"><div><span>21</span>Datenschutz und Sicherheit</div><div><span>22</span>Fehlerbehebung</div><div><span>23</span>Glossar</div><div><span>24</span>Übungen</div></div></div>
+  <div class="who"><b>Für alle</b>Nachschlagen im Alltag</div>
+</section>
+
+<section class="pf">
+<h1 class="chapter" style="break-before:auto"><span class="nr">21</span>Datenschutz und Sicherheit</h1>
+<div class="cards">
+  <div class="card"><div class="h">Unerreichbar</div><p>Die Windows-Version nimmt keine Verbindungen aus dem Internet an. Die Assistent-Schnittstelle ist aus oder nur auf 127.0.0.1.</p></div>
+  <div class="card"><div class="h">Geheimnisse</div><p>Passwörter und Tokens verschlüsselt in <code>geheim.bin</code>, nie in Datenbank oder Sicherung.</p></div>
+  <div class="card"><div class="h">Sicherungen</div><p>AES-256-GCM mit eigenem Passwort. Der manuelle JSON-Export ist unverschlüsselt.</p></div>
+  <div class="card"><div class="h">Web-App</div><p>Passwort serverseitig, Sperre nach 100 Fehlversuchen in 15 Min., optional Cloudflare Access. Kein gegenseitiges Überschreiben.</p></div>
+  <div class="card"><div class="h">Kunden</div><p>E-Mail-Adressen nur mit Einverständnis. Shop und Assistent bekommen keine Kundendaten aus Qwui.</p></div>
+  <div class="card"><div class="h">Offen</div><p>Quellcode unter AGPL-3.0 auf GitHub, jederzeit prüfbar.</p></div>
+</div>
+
+<h1 class="chapter cont"><span class="nr">22</span>Fehlerbehebung</h1>
+<table>
+  <tr><th style="width:36%">Problem</th><th>Lösung</th></tr>
+  <tr><td>QR-Rechnung lässt sich nicht einschalten</td><td>Unter Firma eine gültige CH- oder LI-IBAN eintragen (grüner Haken). Keine QR-IBAN.</td></tr>
+  <tr><td>Quittung wird nicht erstellt</td><td>Bei S/N-Artikeln ein Exemplar wählen oder scannen.</td></tr>
+  <tr><td>Scanner trägt nichts ein</td><td>Cursor ins Feld «Scannen». Unbekannte Nummer: Artikel anlegen bzw. Nummer prüfen.</td></tr>
+  <tr><td>E-Mail wird nicht versendet</td><td>Einstellungen → E-Mail → Test-Mail senden, Meldung lesen. Gmail: App-Passwort. Outlook.com geht nicht.</td></tr>
+  <tr><td>Sicherung «Nicht aktiv»</td><td>Haken, Zielordner und Backup-Passwort (zweimal), Speichern.</td></tr>
+  <tr><td>Shop: «lehnt das Token ab» / HTTP 503</td><td>Token in Qwui ≠ <code>QWUI_TOKEN</code> im Shop / im Shop fehlt das Token oder ist kürzer als 16 Zeichen.</td></tr>
+  <tr><td>Bestellung erscheint nicht</td><td>«Bestellungen abholen» an? Adresse endet auf <code>/api/qwui/feed</code>? Bestellung bezahlt? Status unter Einstellungen → Shop.</td></tr>
+  <tr><td>«Bestellung(en) übersprungen»</td><td>Ungültige Menge oder kein Preis. Im Shop unter <code>/admin</code> prüfen.</td></tr>
+  <tr><td>LM Studio zeigt keine Qwui-Werkzeuge</td><td>Pfad in <code>mcp.json</code> mit doppelten Backslashes? <code>node -v</code> geht? Schnittstelle in Qwui an?</td></tr>
+  <tr><td>«Qwui ist nicht erreichbar» / «lehnt das Token ab»</td><td>Qwui läuft nicht oder Schnittstelle aus; Port prüfen / Token wurde erneuert, neu eintragen.</td></tr>
+  <tr><td>Modell antwortet aus dem Gedächtnis</td><td>«Nutze dafür das Qwui-Werkzeug.» ergänzen oder grösseres Modell.</td></tr>
+  <tr><td>Vorschlag lässt sich nicht übernehmen</td><td>Meldung lesen: Artikelnummer vergeben oder Seriennummern fehlen.</td></tr>
+  <tr><td>Web: «Daten wurden inzwischen geändert»</td><td>Ein anderes Gerät hat gespeichert: <span class="ui">Neu laden</span>, Eingabe wiederholen.</td></tr>
+</table>
+
+<h1 class="chapter"><span class="nr">23</span>Glossar</h1>
+<div class="cards">
+  <div class="card"><div class="h">Artikelnummer</div><p>eindeutige Nummer, auch im Barcode und im Shop</p></div>
+  <div class="card"><div class="h">Exemplar</div><p>einzelnes Stück eines S/N-Artikels</p></div>
+  <div class="card"><div class="h">Feed</div><p>Sortiment, Preis und Menge für den Shop</p></div>
+  <div class="card"><div class="h">Inventurkorrektur</div><p>Bewegung für eine von Hand geänderte Stückzahl</p></div>
+  <div class="card"><div class="h">Laufkunde</div><p>Verkauf ohne Kundendaten, bis CHF 400</p></div>
+  <div class="card"><div class="h">MCP</div><p>Standard für Werkzeuge von Sprachmodellen</p></div>
+  <div class="card"><div class="h">QR-Rechnung</div><p>Einzahlungsschein mit QR-Code</p></div>
+  <div class="card"><div class="h">RF-Referenz</div><p>Zahlungsreferenz nach ISO 11649</p></div>
+  <div class="card"><div class="h">Storno</div><p>Gegenbuchung beim Bearbeiten oder Löschen</p></div>
+  <div class="card"><div class="h">Token</div><p>Zufallsschlüssel, wie ein Passwort behandeln</p></div>
+  <div class="card"><div class="h">Vorschlag</div><p>Entwurf, gebucht erst nach Übernehmen</p></div>
+  <div class="card"><div class="h">Webhook</div><p>Shop-Adresse, an die Qwui den Feed schickt</p></div>
+</div>
+
+<h1 class="chapter cont"><span class="nr">24</span>Übungen für die Schulung</h1>
+<div class="box info"><p>Am besten in einer <b>Übungskopie</b>: <code>Qwui-1.4.0.exe</code> in einen eigenen Ordner (z. B. <code>C:\Qwui-Uebung</code>) kopieren und dort starten. Es entsteht ein eigener, leerer Datenordner. Vorher die normale Qwui schliessen.</p></div>
+<div class="steps">
+  <div class="step"><div><b>Einrichten:</b> Firmendaten mit der Test-IBAN <code>CH93 0076 2011 6238 5295 7</code>. Grüner Haken?</div></div>
+  <div class="step"><div><b>Inventar:</b> drei Artikel, einer mit S/N-Pflicht. Wareneingang mit drei Seriennummern; eine absichtlich doppelt scannen.</div></div>
+  <div class="step"><div><b>Verkauf:</b> Quittung an «Laufkunde» mit zwei Artikeln per Artikelnummer. Danach Lagerbewegungen ansehen.</div></div>
+  <div class="step"><div><b>Rechnung:</b> QR-Rechnung mit MWST an einen neuen Kunden, Seriennummer per Scan. PDF herunterladen, QR-Teil ansehen.</div></div>
+  <div class="step"><div><b>Garantiefall:</b> die verkaufte Seriennummer suchen und zur Quittung springen.</div></div>
+  <div class="step"><div><b>Korrektur:</b> Rechnung bearbeiten (anderes Exemplar), Storno und Neubuchung im Protokoll finden.</div></div>
+  <div class="step"><div><b>Zahlung:</b> Rechnung mit Datum vor zwei Monaten, Mahnung erzeugen, dann als bezahlt markieren.</div></div>
+  <div class="step"><div><b>Sicherung:</b> automatische Sicherung in einen Testordner, Jetzt sichern, mit Passwort wieder einlesen.</div></div>
+  <div class="step"><div><b>Assistent</b> (optional): Schnittstelle an, mit LM Studio die Beispiel-Prompts aus Kapitel 18, Vorschläge übernehmen.</div></div>
+</div>
+<div class="cards two" style="margin-top:14px">
+  <div class="card pb"><div class="h">Merksätze</div><p>Qwui bucht, was du bestätigst, und sonst nichts. Jede Lagerbewegung steht im Protokoll.</p></div>
+  <div class="card pd"><div class="h">Und</div><p>Der Shop zeigt, was Qwui weiss. Das Backup-Passwort gehört in den Passwort-Manager.</p></div>
+</div>
+</section>
+
+<script>
+  // Nummerierte Markierungen über die Bildschirmfotos legen (Positionen aus bilder/marks.js).
+  for (const s of document.querySelectorAll('.shot[data-shot]')) {
+    const m = (window.MARKS || {})[s.dataset.shot];
+    if (!m) continue;
+    for (const k of m.marks) {
+      if (k.missing) continue;
+      const d = document.createElement('div');
+      d.className = 'mk' + (k.x > 88 ? ' r' : '');
+      const pad = 0.4;
+      d.style.left = (k.x - pad) + '%'; d.style.top = (k.y - pad * m.ratio) + '%';
+      d.style.width = (k.w + 2 * pad) + '%'; d.style.height = (k.h + 2 * pad * m.ratio) + '%';
+      d.innerHTML = '<b>' + k.n + '</b>';
+      s.appendChild(d);
+    }
+  }
+</script>
+</body>
+</html>

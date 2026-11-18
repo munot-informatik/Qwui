@@ -8,6 +8,10 @@ Datenbank (Cloudflare D1) und Passwortschutz.
 Dieser Guide führt einmal komplett von "leeres Verzeichnis" bis "fertig
 eingerichtete, live erreichbare App" durch.
 
+**Schulungsunterlagen:** Ein ausführlicher Leitfaden zu Aufbau und Bedienung, mit
+Online-Shop-Anbindung, Schnittstellen und lokalem Sprachmodell, liegt als PDF unter
+[`docs/Qwui-Schulungsunterlagen.pdf`](docs/Qwui-Schulungsunterlagen.pdf) (Quelle in `docs/schulung/`).
+
 ## Inhaltsverzeichnis
 
 1. [Überblick & Funktionen](#1-überblick--funktionen)
