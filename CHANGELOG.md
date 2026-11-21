@@ -3,7 +3,7 @@
 Alle nennenswerten Änderungen an Qwui. Versionsnummern folgen der Web- und
 Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
 
-## Unveröffentlicht (geplant als 1.5.0)
+## 1.5.0 — 21. November 2026
 
 ### Offerten
 
