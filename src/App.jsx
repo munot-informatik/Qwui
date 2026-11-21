@@ -31,7 +31,42 @@ import {
   changeUnitStatus,
   receiveGoods,
   appendMovements,
+  bookCreditNote,
+  reverseCreditNote,
 } from "../shared/stock.js";
+import {
+  DOC_TYPE,
+  QUOTE_PREFIX,
+  CREDIT_NOTE_PREFIX,
+  QUOTE_STATUS,
+  DEFAULT_QUOTE_VALID_DAYS,
+  docWord,
+  isQuote,
+  isCreditNote,
+  nextDocNumber,
+  docNumberValue,
+  addDaysISO,
+  quoteToReceiptItems,
+  buildCreditNote,
+  creditNotesFor,
+  creditableLines,
+  reopenOrphanedQuotes,
+  refundLabel,
+  deliveryNoteItems,
+  isDeliveryNote,
+  docNumberLine,
+  docMetaLines,
+  recipientLabel,
+  itemsLabel,
+  totalLabel,
+  docClosing,
+  quoteState,
+  QUOTE_STATE_LABEL,
+  creditTotalFor,
+} from "../shared/documents.js";
+import Offerten from "./Offerten.jsx";
+import GutschriftForm from "./GutschriftForm.jsx";
+import Updates, { UpdateBanner } from "./Updates.jsx";
 import { UNIT_STATUS, isSellable, checkNewSerials } from "../shared/serials.js";
 import { StockCell, UnitList, Wareneingang, SeriennummerSuche, Lagerbewegungen, ArticleForm } from "./Lager.jsx";
 import EmailEinstellungen from "./EmailEinstellungen.jsx";
@@ -39,7 +74,6 @@ import {
   hasEmailConsent,
   grantEmailConsent,
   withoutUnconsentedEmail,
-  hasLegacyEmailWithoutConsent,
   isValidEmail,
   receiptCustomerSnapshot,
   redactEmails,
@@ -64,6 +98,7 @@ const desktopMail = typeof window !== "undefined" ? window.qwuiDesktop?.mail || 
 const desktopBackup = typeof window !== "undefined" ? window.qwuiDesktop?.backup || null : null;
 const desktopShop = typeof window !== "undefined" ? window.qwuiDesktop?.shop || null : null;
 const desktopAssistant = typeof window !== "undefined" ? window.qwuiDesktop?.assistant || null : null;
+const desktopUpdates = typeof window !== "undefined" ? window.qwuiDesktop?.updates || null : null;
 import {
   Plus,
   Trash2,
@@ -87,6 +122,9 @@ import {
   Package,
   Store,
   Bot,
+  ClipboardList,
+  Undo2,
+  Truck,
 } from "lucide-react";
 
 // Backup-Dateiformat: siehe shared/backupFormat.js. Die Versionsnummer ist
@@ -104,6 +142,12 @@ const KEYS = {
   units: "serial-units",
   // Höchste je vergebene Quittungsnummer, auch von gelöschten Quittungen.
   lastNumber: "receipt-last-number",
+  // Ab 1.5.0: Offerten und Gutschriften, je mit eigener Nummernfolge (siehe
+  // shared/documents.js).
+  quotes: "quotes-list",
+  quoteLastNumber: "quote-last-number",
+  creditNotes: "credit-notes-list",
+  creditNoteLastNumber: "credit-note-last-number",
 };
 
 const emptyCompany = {
@@ -277,8 +321,21 @@ function formatDateDE(iso) {
 
 // Mit aktivierter QR-Rechnung ist der Betrag noch nicht bezahlt und das
 // Dokument fungiert als Rechnung statt als Quittung für bereits erhaltenes Geld.
+// Offerte, Gutschrift und Lieferschein: siehe shared/documents.js.
 function documentWord(receipt) {
-  return receipt.qrBillEnabled ? "Rechnung" : "Quittung";
+  return docWord(receipt);
+}
+
+// Ansicht einer Quittung als Lieferschein: gleiche Nummer und Daten, ohne
+// Preise und ohne Einzahlungsschein.
+function asDeliveryNote(receipt) {
+  return {
+    ...receipt,
+    docType: DOC_TYPE.deliveryNote,
+    sourceWord: docWord(receipt),
+    qrBillEnabled: false,
+    items: deliveryNoteItems(receipt),
+  };
 }
 
 // Auswählbare Zahlungsfristen (in Tagen) für QR-Rechnungen. 30 Tage ist der
@@ -319,6 +376,20 @@ export default function ReceiptApp() {
   const [inventory, setInventory] = useState([]);
   const [units, setUnits] = useState([]);
   const [lastNumber, setLastNumber] = useState(0);
+  // Ab 1.5.0: Offerten und Gutschriften (shared/documents.js).
+  const [quotes, setQuotes] = useState([]);
+  const [lastQuoteNumber, setLastQuoteNumber] = useState(0);
+  const [creditNotes, setCreditNotes] = useState([]);
+  const [lastCreditNoteNumber, setLastCreditNoteNumber] = useState(0);
+  // Formular: Quittung/Rechnung oder Offerte.
+  const [formKind, setFormKind] = useState("beleg");
+  const [validUntil, setValidUntil] = useState(() => addDaysISO(localDateISO(), DEFAULT_QUOTE_VALID_DAYS));
+  const [editingQuoteId, setEditingQuoteId] = useState(null);
+  // Offerte, aus der die Quittung im Formular gerade entsteht: { id, number, warnings }.
+  const [pendingQuote, setPendingQuote] = useState(null);
+  // Vorschau: Quittung als Beleg oder als Lieferschein; Gutschrift-Formular offen?
+  const [previewView, setPreviewView] = useState("beleg");
+  const [creditFormOpen, setCreditFormOpen] = useState(false);
   // Lagerbewegungen, nach Jahres-Schlüssel: { "stock-movements-2027": [...] }
   const [movementsByKey, setMovementsByKey] = useState({});
   // Meldungen der Lagerbuchung beim Erstellen/Bearbeiten einer Quittung:
@@ -360,7 +431,19 @@ export default function ReceiptApp() {
   // weiterläuft (z. B. der Mailversand) — dessen Closure kennt nur den Stand
   // von vor dem await und würde später Geändertes wieder überschreiben.
   const latest = useRef({});
-  latest.current = { receipts, inventory, units, movementsByKey, lastNumber, currentReceipt, company };
+  latest.current = {
+    receipts,
+    inventory,
+    units,
+    movementsByKey,
+    lastNumber,
+    currentReceipt,
+    company,
+    quotes,
+    lastQuoteNumber,
+    creditNotes,
+    lastCreditNoteNumber,
+  };
 
   useEffect(() => {
     (async () => {
@@ -413,6 +496,19 @@ export default function ReceiptApp() {
         console.error("Laden der Exemplare/Lagerbewegungen fehlgeschlagen", e);
         loadFailed = true;
       }
+      try {
+        const q = await window.storage.get(KEYS.quotes);
+        if (q && q.value) setQuotes(JSON.parse(q.value));
+        const ql = await window.storage.get(KEYS.quoteLastNumber);
+        if (ql && ql.value) setLastQuoteNumber(Number(JSON.parse(ql.value)) || 0);
+        const cn = await window.storage.get(KEYS.creditNotes);
+        if (cn && cn.value) setCreditNotes(JSON.parse(cn.value));
+        const cl = await window.storage.get(KEYS.creditNoteLastNumber);
+        if (cl && cl.value) setLastCreditNoteNumber(Number(JSON.parse(cl.value)) || 0);
+      } catch (e) {
+        console.error("Laden der Offerten/Gutschriften fehlgeschlagen", e);
+        loadFailed = true;
+      }
       if (loadFailed) {
         setPersistError(
           "Laden fehlgeschlagen — möglicherweise ist die Datenquelle gerade nicht erreichbar."
@@ -431,6 +527,8 @@ export default function ReceiptApp() {
     setter(value);
     if (key === KEYS.receipts) latest.current.receipts = value;
     if (key === KEYS.inventory) latest.current.inventory = value;
+    if (key === KEYS.quotes) latest.current.quotes = value;
+    if (key === KEYS.creditNotes) latest.current.creditNotes = value;
     try {
       await window.storage.set(key, JSON.stringify(value), false);
       setPersistError("");
@@ -471,6 +569,9 @@ export default function ReceiptApp() {
     extra.forEach(({ key, value }) => {
       if (key === KEYS.receipts) latest.current.receipts = value;
       if (key === KEYS.lastNumber) latest.current.lastNumber = value;
+      if (key === KEYS.quotes) latest.current.quotes = value;
+      if (key === KEYS.creditNotes) latest.current.creditNotes = value;
+      if (key === KEYS.creditNoteLastNumber) latest.current.lastCreditNoteNumber = value;
     });
     try {
       await window.storage.setMany(entries.map(({ key, value }) => ({ key, value: JSON.stringify(value) })));
@@ -503,6 +604,97 @@ export default function ReceiptApp() {
 
   function stockCtx() {
     return { now: new Date().toISOString(), source: "app", newId: uid };
+  }
+
+  // ---- Gutschriften (ab 1.5.0) ----
+  // Gutschrift zu einer Quittung: Rücknahme, Bestand, Bewegungen und die neue
+  // Gutschrift in einem Schritt. Liefert Fehlermeldungen oder [].
+  async function createCreditNote(receipt, selection, { date: creditDate, refund, note: creditNote }) {
+    // Ohne Datum fiele die Gutschrift aus jeder Monats- und Umsatzauswertung.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(creditDate || ""))) return ["Bitte ein Datum für die Gutschrift angeben."];
+    const list = latest.current.creditNotes;
+    const number = nextDocNumber(CREDIT_NOTE_PREFIX, list, latest.current.lastCreditNoteNumber);
+    const built = buildCreditNote(receipt, selection, {
+      creditNotes: list,
+      number,
+      date: creditDate,
+      refund,
+      note: creditNote,
+      company: latest.current.company,
+      now: new Date().toISOString(),
+      newId: uid,
+    });
+    if (built.errors.length) return built.errors;
+    const booked = bookCreditNote({ inventory: latest.current.inventory, units: latest.current.units }, built.creditNote, stockCtx());
+    if (booked.errors.length) return booked.errors;
+    const next = [...list, booked.creditNote];
+    const saved = await commitStock({
+      inventory: booked.inventory,
+      units: booked.units,
+      movements: booked.movements,
+      extra: [
+        { key: KEYS.creditNotes, value: next, setter: setCreditNotes, previous: list },
+        {
+          key: KEYS.creditNoteLastNumber,
+          value: docNumberValue(CREDIT_NOTE_PREFIX, number),
+          setter: setLastCreditNoteNumber,
+          previous: latest.current.lastCreditNoteNumber,
+        },
+      ],
+    });
+    if (!saved) return ["Die Gutschrift konnte nicht gespeichert werden."];
+    setCreditFormOpen(false);
+    openReceipt(booked.creditNote);
+    return [];
+  }
+
+  // Löschen kehrt die Rücknahme um. Die Nummer bleibt vergeben.
+  async function deleteCreditNote(id) {
+    const list = latest.current.creditNotes;
+    const existing = list.find((c) => c.id === id);
+    if (!existing) return;
+    const reversed = reverseCreditNote({ inventory: latest.current.inventory, units: latest.current.units }, existing, stockCtx());
+    if (reversed.errors.length) {
+      window.alert(reversed.errors.join("\n"));
+      return;
+    }
+    const saved = await commitStock({
+      inventory: reversed.inventory,
+      units: reversed.units,
+      movements: reversed.movements,
+      extra: [{ key: KEYS.creditNotes, value: list.filter((c) => c.id !== id), setter: setCreditNotes, previous: list }],
+    });
+    if (!saved) return;
+    if (latest.current.currentReceipt?.id === id) closePreview("receipts");
+  }
+
+  // Eine Quittung mit Gutschrift bleibt, wie sie ist: Die Gutschrift verweist
+  // auf ihre Positionen und hat Ware zurückgebucht.
+  function creditNoteBlocker(receipt, action) {
+    const linked = creditNotesFor(latest.current.creditNotes, receipt?.id);
+    if (!linked.length) return false;
+    window.alert(
+      `Zu dieser ${documentWord(receipt)} gibt es ${linked.length === 1 ? "die Gutschrift" : "die Gutschriften"} ${linked
+        .map((c) => c.number)
+        .join(", ")}. Sie lässt sich deshalb nicht mehr ${action}. Bitte zuerst die Gutschrift löschen.`
+    );
+    return true;
+  }
+
+  // ---- Offerten (ab 1.5.0) ----
+  async function setQuoteStatus(id, status) {
+    const list = latest.current.quotes;
+    const next = list.map((q) => (q.id === id ? { ...q, status, decidedAt: status === QUOTE_STATUS.open ? null : new Date().toISOString() } : q));
+    const ok = await persist(KEYS.quotes, next, setQuotes);
+    if (ok) setCurrentReceipt((cur) => (cur && cur.id === id ? next.find((q) => q.id === id) : cur));
+  }
+
+  async function deleteQuote(id) {
+    const list = latest.current.quotes;
+    const ok = await persist(KEYS.quotes, list.filter((q) => q.id !== id), setQuotes);
+    if (!ok) return;
+    if (editingQuoteId === id) resetForm("offerte");
+    if (latest.current.currentReceipt?.id === id) closePreview("quotes");
   }
 
   async function saveCompany() {
@@ -591,7 +783,19 @@ export default function ReceiptApp() {
   }
 
     function exportAllData() {
-    const payload = buildBackupPayload({ company, customers, receipts, inventory, units, movementsByKey, lastReceiptNumber: lastNumber });
+    const payload = buildBackupPayload({
+      company,
+      customers,
+      receipts,
+      inventory,
+      units,
+      movementsByKey,
+      lastReceiptNumber: lastNumber,
+      quotes,
+      lastQuoteNumber,
+      creditNotes,
+      lastCreditNoteNumber,
+    });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -687,7 +891,37 @@ export default function ReceiptApp() {
       // die Bestätigung stehen, damit der Import wiederholt werden kann — der
       // React-State zeigt sonst die importierten Daten an, während in der
       // Datenbank noch die alten stehen und beim nächsten Laden zurückkommen.
-      if (okCompany && okCustomers && okReceipts && okInventory && okStock) {
+      // Ab 1.5.0: Offerten und Gutschriften. Ältere Sicherungen haben sie
+      // nicht — dann bleiben die vorhandenen stehen.
+      let okDocs = true;
+      if (Array.isArray(importPreview.quotes)) {
+        okDocs = (await persist(KEYS.quotes, importPreview.quotes, setQuotes)) && okDocs;
+      } else {
+        // Sicherung ohne Offerten: Die vorhandenen bleiben. Eine angenommene,
+        // deren Quittung es im importierten Stand nicht gibt, ist wieder offen.
+        const current = latest.current.quotes;
+        const reopened = reopenOrphanedQuotes(current, importPreview.receipts || []);
+        if (reopened !== current) okDocs = (await persist(KEYS.quotes, reopened, setQuotes)) && okDocs;
+      }
+      // Gutschriften gehören zu den Quittungen und Exemplaren, die der Import
+      // gerade ersetzt hat. Eine Sicherung von vor 1.5.0 kennt keine — die
+      // bisherigen zeigten sonst auf Quittungen und Rücknahmen, die es im
+      // importierten Stand nicht gibt. Ihre Nummern bleiben vergeben.
+      const importedCredits = Array.isArray(importPreview.creditNotes) ? importPreview.creditNotes : [];
+      if (importedCredits.length || latest.current.creditNotes.length) {
+        okDocs = (await persist(KEYS.creditNotes, importedCredits, setCreditNotes)) && okDocs;
+      }
+      // Vergebene Nummern bleiben vergeben — auch nach einem Import.
+      const importedQuoteLast = Number(importPreview.lastQuoteNumber) || 0;
+      if (importedQuoteLast > latest.current.lastQuoteNumber) {
+        okDocs = (await persist(KEYS.quoteLastNumber, importedQuoteLast, setLastQuoteNumber)) && okDocs;
+      }
+      const importedCreditLast = Number(importPreview.lastCreditNoteNumber) || 0;
+      if (importedCreditLast > latest.current.lastCreditNoteNumber) {
+        okDocs = (await persist(KEYS.creditNoteLastNumber, importedCreditLast, setLastCreditNoteNumber)) && okDocs;
+      }
+
+      if (okCompany && okCustomers && okReceipts && okInventory && okStock && okDocs) {
         // Einstellungen aus einer automatischen Sicherung (Windows): SMTP und
         // Backup-Ordner übernehmen, Passwörter sind darin nie enthalten. Erst
         // nach geglücktem Import — sonst stünden neue Einstellungen neben den
@@ -1428,7 +1662,12 @@ export default function ReceiptApp() {
   const netTotal = vatEnabled ? round2(total / (1 + VAT_RATE)) : total;
   const vatAmount = vatEnabled ? round2(total - netTotal) : 0;
 
-  function resetForm() {
+  // kind: "beleg" (Quittung/Rechnung) oder "offerte".
+  function resetForm(kind = "beleg") {
+    setFormKind(kind);
+    setEditingQuoteId(null);
+    setPendingQuote(null);
+    setValidUntil(addDaysISO(todayISO(), DEFAULT_QUOTE_VALID_DAYS));
     setSelectedCustomerId("");
     setManualCustomer(emptyPerson);
     setDate(todayISO());
@@ -1466,6 +1705,7 @@ export default function ReceiptApp() {
   const defaultMail = selectedCustomerId && deliveryTo === null ? hasEmailConsent(activeCustomer) && !!deliveryAddress : !!deliveryAddress;
   const wantsMail = !!desktopMail && (deliveryMail ?? defaultMail);
   const canCreate = activeCustomer.name.trim() && validItems.length > 0;
+  const isQuoteForm = formKind === "offerte";
   const needsAddress = total >= 400;
 
   // Kunden-ID für den Beleg: gespeicherter Kunde → seine ID; manuell
@@ -1512,14 +1752,140 @@ export default function ReceiptApp() {
     setCreating(true);
     let created = null;
     try {
-      created = await saveReceiptFromForm();
+      created = formKind === "offerte" ? await saveQuoteFromForm() : await saveReceiptFromForm();
     } finally {
       creatingRef.current = false;
       setCreating(false);
     }
     // Erst nach der Sperre: Ein langer Mailversand soll die nächste Quittung
-    // nicht aufhalten.
-    if (created) await deliverAfterCreate(created);
+    // nicht aufhalten. Eine Offerte geht nur auf Knopfdruck aus der Vorschau
+    // hinaus — im Offerten-Formular gibt es keine Versand-Wahl.
+    if (created && !isQuote(created)) await deliverAfterCreate(created);
+    if (created && isQuote(created)) setMailState({ state: "idle", to: "", error: "" });
+  }
+
+  // Positionen einer Offerte: ohne Exemplare — die wählt man erst in der Quittung.
+  function cleanQuoteItems(list) {
+    return cleanItems(list).map((it) => ({ ...it, unitId: "", serial: "" }));
+  }
+
+  // Offerte speichern: bucht nichts, eigene Nummer (O-0001).
+  async function saveQuoteFromForm() {
+    const now = new Date().toISOString();
+    const list = latest.current.quotes;
+    const fields = {
+      date,
+      validUntil,
+      items: cleanQuoteItems(validItems),
+      netTotal,
+      vatEnabled,
+      vatRate: VAT_RATE,
+      vatAmount,
+      total,
+      note,
+    };
+    if (editingQuoteId) {
+      const existing = list.find((q) => q.id === editingQuoteId);
+      if (!existing) {
+        setStockErrors(["Diese Offerte wurde inzwischen gelöscht."]);
+        setEditingQuoteId(null);
+        return null;
+      }
+      const updated = {
+        ...existing,
+        ...fields,
+        customer: receiptCustomer(existing),
+        editedAt: now,
+        ...(existing.emailDelivery ? { emailDelivery: { ...existing.emailDelivery, beforeEdit: true } } : {}),
+      };
+      const ok = await persist(KEYS.quotes, list.map((q) => (q.id === existing.id ? updated : q)), setQuotes);
+      if (!ok) return null;
+      setEditingQuoteId(null);
+      setCurrentReceipt(updated);
+      setPreviewView("beleg");
+      setMode("preview");
+      return null;
+    }
+    const number = nextDocNumber(QUOTE_PREFIX, list, latest.current.lastQuoteNumber);
+    const quote = {
+      id: uid(),
+      docType: DOC_TYPE.quote,
+      number,
+      status: QUOTE_STATUS.open,
+      ...fields,
+      customer: receiptCustomer(null),
+      company: latest.current.company,
+      createdAt: now,
+    };
+    const ok = await persist(KEYS.quotes, [...list, quote], setQuotes);
+    if (!ok) return null;
+    await persist(KEYS.quoteLastNumber, docNumberValue(QUOTE_PREFIX, number), setLastQuoteNumber);
+    setCurrentReceipt(quote);
+    setPreviewView("beleg");
+    setMode("preview");
+    return quote;
+  }
+
+  // Kunde eines Belegs zurück ins Formular: gespeicherter Kunde, Laufkunde
+  // oder eingetippte Adresse.
+  function loadCustomerIntoForm(customer) {
+    const c = customer || {};
+    // Ab 1.2.0 über die Kunden-ID; ältere Belege kennen nur Name und E-Mail.
+    const matchingCustomer =
+      customers.find((x) => c.id && x.id === c.id) || (!c.id && customers.find((x) => x.name === c.name && x.email === c.email));
+    const walkIn =
+      c.name === WALK_IN_NAME &&
+      !["address", "street", "houseNumber", "postalCode", "city", "email", "phone"].some((f) => String(c[f] || "").trim());
+    if (matchingCustomer) {
+      setSelectedCustomerId(matchingCustomer.id);
+      setManualCustomer(emptyPerson);
+    } else if (walkIn) {
+      setSelectedCustomerId("");
+      setManualCustomer(emptyPerson);
+    } else {
+      setSelectedCustomerId("");
+      setManualCustomer({
+        name: c.name || "",
+        address: c.address || "",
+        street: c.street || "",
+        houseNumber: c.houseNumber || "",
+        postalCode: c.postalCode || "",
+        city: c.city || "",
+        email: c.email || "",
+        phone: c.phone || "",
+        emailConsent: c.emailConsent || null,
+      });
+    }
+  }
+
+  function startEditQuote(q) {
+    resetForm("offerte");
+    loadCustomerIntoForm(q.customer);
+    setDate(q.date);
+    setDateTouched(true);
+    setValidUntil(q.validUntil || addDaysISO(q.date, DEFAULT_QUOTE_VALID_DAYS));
+    setItems((q.items || []).map((it) => ({ ...emptyItem(), ...it, quantity: String(itemQuantity(it)), id: uid() })));
+    setNote(q.note || "");
+    setVatEnabled(!!q.vatEnabled);
+    setEditingReceiptId(null);
+    setEditingQuoteId(q.id);
+    setMode("form");
+    setTab("new");
+  }
+
+  // Offerte angenommen: Quittungsformular mit Kunde und Positionen füllen.
+  // Gebucht und als «angenommen» markiert wird beim Erstellen der Quittung.
+  function startReceiptFromQuote(q) {
+    const { items: quoteItems, warnings } = quoteToReceiptItems(q, { inventory, isSerialTracked, makeItem: emptyItem });
+    resetForm("beleg");
+    setEditingReceiptId(null);
+    loadCustomerIntoForm(q.customer);
+    setItems(quoteItems.length ? quoteItems : [emptyItem()]);
+    setNote(q.note || "");
+    setVatEnabled(!!q.vatEnabled);
+    setPendingQuote({ id: q.id, number: q.number, warnings });
+    setMode("form");
+    setTab("new");
   }
 
   async function saveReceiptFromForm() {
@@ -1601,6 +1967,16 @@ export default function ReceiptApp() {
       }
     }
 
+    // Offerte inzwischen gelöscht oder schon zu einer Quittung geworden?
+    const quoteList = latest.current.quotes;
+    const sourceQuote = pendingQuote ? quoteList.find((q) => q.id === pendingQuote.id) : null;
+    if (pendingQuote && (!sourceQuote || sourceQuote.status === QUOTE_STATUS.accepted)) {
+      setStockErrors([
+        `Die Offerte ${pendingQuote.number} ist ${sourceQuote ? `schon als Quittung Nr. ${sourceQuote.receiptNumber} übernommen` : "nicht mehr vorhanden"} — keine Quittung erstellt.`,
+      ]);
+      return;
+    }
+
     const number = nextReceiptNumber(receipts, lastNumber);
     const isQrBill = qrBillEnabled && isValidSwissIban(company.qrBill?.iban) && !isQrIban(company.qrBill?.iban);
     const draft = {
@@ -1620,6 +1996,7 @@ export default function ReceiptApp() {
       note,
       ...(normalizeCosts(costsForm) ? { internalCosts: normalizeCosts(costsForm) } : {}),
       ...(pendingOrder ? { shopOrder: { orderId: pendingOrder.orderId, number: pendingOrder.number, draftId: pendingOrder.draftId } } : {}),
+      ...(sourceQuote ? { fromQuote: { id: sourceQuote.id, number: sourceQuote.number } } : {}),
       company,
       createdAt: new Date().toISOString(),
     };
@@ -1627,14 +2004,30 @@ export default function ReceiptApp() {
     if (!showStockResult(booked)) return;
     const receipt = booked.receipt;
     const next = [...receipts, receipt];
+    // Die Offerte gilt im selben Schritt als angenommen — ohne Quittung bleibt sie offen.
+    const quoteExtra = sourceQuote
+      ? [
+          {
+            key: KEYS.quotes,
+            value: quoteList.map((q) =>
+              q.id === sourceQuote.id
+                ? { ...q, status: QUOTE_STATUS.accepted, decidedAt: receipt.createdAt, receiptId: receipt.id, receiptNumber: receipt.number }
+                : q
+            ),
+            setter: setQuotes,
+            previous: quoteList,
+          },
+        ]
+      : [];
     const saved = await commitStock({
       inventory: booked.inventory,
       units: booked.units,
       movements: booked.movements,
-      extra: receiptsExtra(next, number),
+      extra: [...receiptsExtra(next, number), ...quoteExtra],
     });
     // Nicht gespeichert: im Formular bleiben, nichts versenden.
     if (!saved) return;
+    setPendingQuote(null);
     if (pendingOrder && desktopAssistant) {
       // Erst nach dem Speichern: Ohne Quittung bleibt die Bestellung offen.
       // Schlägt der Statuswechsel fehl, erkennt «Quittung erstellen…» die
@@ -1663,33 +2056,11 @@ export default function ReceiptApp() {
   }
 
   function startEditReceipt(r) {
-    // Ab 1.2.0 über die Kunden-ID; ältere Belege kennen nur Name und E-Mail.
-    const matchingCustomer =
-      customers.find((c) => r.customer.id && c.id === r.customer.id) ||
-      (!r.customer.id && customers.find((c) => c.name === r.customer.name && c.email === r.customer.email));
-    const walkIn =
-      r.customer.name === WALK_IN_NAME &&
-      !["address", "street", "houseNumber", "postalCode", "city", "email", "phone"].some((f) => String(r.customer[f] || "").trim());
-    if (matchingCustomer) {
-      setSelectedCustomerId(matchingCustomer.id);
-      setManualCustomer(emptyPerson);
-    } else if (walkIn) {
-      setSelectedCustomerId("");
-      setManualCustomer(emptyPerson);
-    } else {
-      setSelectedCustomerId("");
-      setManualCustomer({
-        name: r.customer.name || "",
-        address: r.customer.address || "",
-        street: r.customer.street || "",
-        houseNumber: r.customer.houseNumber || "",
-        postalCode: r.customer.postalCode || "",
-        city: r.customer.city || "",
-        email: r.customer.email || "",
-        phone: r.customer.phone || "",
-        emailConsent: r.customer.emailConsent || null,
-      });
-    }
+    if (creditNoteBlocker(r, "bearbeiten")) return;
+    setFormKind("beleg");
+    setEditingQuoteId(null);
+    setPendingQuote(null);
+    loadCustomerIntoForm(r.customer);
     setDeliveryMail(null);
     setDeliveryTo(null);
     setDate(r.date);
@@ -1716,14 +2087,21 @@ export default function ReceiptApp() {
   async function deleteReceipt(id) {
     const existing = receipts.find((r) => r.id === id);
     if (!existing) return;
+    if (creditNoteBlocker(existing, "löschen")) return;
     const next = receipts.filter((r) => r.id !== id);
     const reversed = reverseReceipt({ inventory, units }, existing, stockCtx());
+    // Stammt die Quittung aus einer Offerte, ist diese wieder offen — sonst
+    // zeigte sie auf eine Quittung, die es nicht mehr gibt, und liesse sich
+    // nie mehr übernehmen.
+    const quoteList = latest.current.quotes;
+    const reopened = reopenOrphanedQuotes(quoteList, next);
+    const quoteExtra = reopened !== quoteList ? [{ key: KEYS.quotes, value: reopened, setter: setQuotes, previous: quoteList }] : [];
     // Die Nummer bleibt vergeben, auch wenn die Quittung weg ist.
     const saved = await commitStock({
       inventory: reversed.inventory,
       units: reversed.units,
       movements: reversed.movements,
-      extra: receiptsExtra(next, existing.number),
+      extra: [...receiptsExtra(next, existing.number), ...quoteExtra],
     });
     if (!saved) return;
     if (reversed.warnings.length) setPersistError(reversed.warnings.join(" "));
@@ -1749,19 +2127,38 @@ export default function ReceiptApp() {
     resetForm();
   }
 
-  function openReceipt(r) {
+  // view: "beleg" oder "lieferschein"; credit: Gutschrift-Formular gleich öffnen.
+  function openReceipt(r, { view = "beleg", credit = false } = {}) {
     setStockWarnings([]);
     setMailState({ state: "idle", to: "", error: "" });
+    setPreviewView(view);
+    setCreditFormOpen(credit);
     setCurrentReceipt(r);
     setMode("preview");
   }
 
-  function backToForm() {
+  // Vorschau schliessen und zu einer Liste (Belege, Offerten) zurück.
+  function closePreview(targetTab) {
     setMailState({ state: "idle", to: "", error: "" });
+    setCreditFormOpen(false);
+    setPreviewView("beleg");
+    setCurrentReceipt(null);
+    setMode("form");
+    if (targetTab) setTab(targetTab);
+  }
+
+  // Aus der Vorschau einer Offerte geht es zu einer neuen Offerte, sonst zu
+  // einer neuen Quittung.
+  function backToForm() {
+    const kind = isQuote(latest.current.currentReceipt) ? "offerte" : "beleg";
+    setMailState({ state: "idle", to: "", error: "" });
+    setCreditFormOpen(false);
+    setPreviewView("beleg");
     setMode("form");
     setCurrentReceipt(null);
     setEditingReceiptId(null);
-    resetForm();
+    resetForm(kind);
+    setTab("new");
   }
 
   // Betreff und Text der E-Mail. attached: true beim direkten Versand mit
@@ -1827,12 +2224,17 @@ export default function ReceiptApp() {
     const emailDelivery = result.ok
       ? { status: "gesendet", at: new Date().toISOString() }
       : { status: "fehlgeschlagen", at: new Date().toISOString(), error: redactEmails(result.error) };
-    const current = latest.current.receipts;
+    // Offerten und Gutschriften stehen in eigenen Listen.
+    const [listKey, setter, current] = isQuote(receipt)
+      ? [KEYS.quotes, setQuotes, latest.current.quotes]
+      : isCreditNote(receipt)
+        ? [KEYS.creditNotes, setCreditNotes, latest.current.creditNotes]
+        : [KEYS.receipts, setReceipts, latest.current.receipts];
     if (current.some((r) => r.id === receipt.id)) {
       await persist(
-        KEYS.receipts,
+        listKey,
         current.map((r) => (r.id === receipt.id ? { ...r, emailDelivery } : r)),
-        setReceipts
+        setter
       );
     }
     setCurrentReceipt((cur) => (cur && cur.id === receipt.id ? { ...cur, emailDelivery } : cur));
@@ -1844,7 +2246,7 @@ export default function ReceiptApp() {
 
   // receipt: direkt nach dem Erstellen übergeben, weil currentReceipt in
   // diesem Moment noch den alten Stand hat.
-  function printReceipt(receipt = currentReceipt) {
+  function printReceipt(receipt = previewDoc) {
     const previousTitle = document.title;
     if (receipt && receipt.number) {
       document.title = `${documentWord(receipt)} ${receipt.number} – ${receipt.customer.name || ""}`.trim();
@@ -1873,8 +2275,14 @@ export default function ReceiptApp() {
     }
   }, []);
 
+  // Was die Vorschau gerade zeigt: der Beleg selbst oder sein Lieferschein.
+  const deliveryView =
+    !!currentReceipt && previewView === "lieferschein" && !isQuote(currentReceipt) && !isCreditNote(currentReceipt);
+  const previewDoc = deliveryView ? asDeliveryNote(currentReceipt) : currentReceipt;
+
   async function downloadPdf() {
-    if (!currentReceipt) return;
+    if (!previewDoc) return;
+    const currentReceipt = previewDoc;
     setGeneratingPdf(true);
     try {
       const pdfBytes = await buildReceiptPdfBytes(currentReceipt);
@@ -1899,7 +2307,8 @@ export default function ReceiptApp() {
   // des Geräts (WhatsApp, Mail, etc.) — löst den manuellen Umweg über
   // "herunterladen, dann in der anderen App anhängen".
   async function sharePdf() {
-    if (!currentReceipt) return;
+    if (!previewDoc) return;
+    const currentReceipt = previewDoc;
     setSharing(true);
     try {
       const word = documentWord(currentReceipt);
@@ -1907,10 +2316,11 @@ export default function ReceiptApp() {
       const file = new File([pdfBytes], `${word}_${currentReceipt.number}.pdf`, {
         type: "application/pdf",
       });
+      const withAmount = currentReceipt.docType !== DOC_TYPE.deliveryNote;
       await navigator.share({
         files: [file],
         title: `${word} Nr. ${currentReceipt.number}`,
-        text: `${word} Nr. ${currentReceipt.number} – CHF ${chf(currentReceipt.total)}`,
+        text: `${word} Nr. ${currentReceipt.number}${withAmount ? ` – CHF ${chf(currentReceipt.total)}` : ""}`,
       });
     } catch (err) {
       if (err.name !== "AbortError") {
@@ -1950,9 +2360,13 @@ export default function ReceiptApp() {
       // Hier bewusst nicht "beiliegender Einzahlungsschein" wie im PDF —
       // die WhatsApp-Nachricht ist reiner Text ohne Anhang, das würde einen
       // nicht vorhandenen Anhang suggerieren.
-      receipt.qrBillEnabled
-        ? `Zahlbar per Rechnung innert ${paymentTermOf(receipt)} ${dayWord(paymentTermOf(receipt))} (Einzahlungsschein siehe PDF).`
-        : "Betrag dankend erhalten."
+      isQuote(receipt)
+        ? `Gültig bis ${formatDateDE(receipt.validUntil)}.`
+        : isCreditNote(receipt)
+          ? `Gutschrift zu ${receipt.receiptWord} Nr. ${receipt.receiptNumber}. ${refundLabel(receipt)}.`
+          : receipt.qrBillEnabled
+            ? `Zahlbar per Rechnung innert ${paymentTermOf(receipt)} ${dayWord(paymentTermOf(receipt))} (Einzahlungsschein siehe PDF).`
+            : "Betrag dankend erhalten."
     );
     if (receipt.company.name) lines.push(receipt.company.name);
     return lines.join("\n");
@@ -2043,6 +2457,8 @@ export default function ReceiptApp() {
         </div>
       )}
 
+      {desktopUpdates && mode === "form" && tab !== "updates" && <UpdateBanner onOpen={() => setTab("updates")} />}
+
       {mode === "form" && (
         <div className="qwui-shell" style={styles.shell}>
           <nav className="no-print qwui-sidebar" style={styles.sidebar}>
@@ -2055,6 +2471,7 @@ export default function ReceiptApp() {
             </div>
             <NavItem icon={FileText} label="Neue Quittung" active={tab === "new"} onClick={() => setTab("new")} />
             <NavItem icon={Wallet} label="Belege" active={tab === "receipts"} onClick={() => setTab("receipts")} />
+            <NavItem icon={ClipboardList} label="Offerten" active={tab === "quotes"} onClick={() => setTab("quotes")} />
             <NavItem icon={Users} label="Kunden" active={tab === "customers"} onClick={() => setTab("customers")} />
             <NavItem icon={Package} label="Inventar" active={tab === "inventory"} onClick={() => setTab("inventory")} />
             {desktopAssistant && openDraftCount > 0 && (
@@ -2067,6 +2484,7 @@ export default function ReceiptApp() {
             {desktopShop && <NavItem icon={Store} label="Shop" active={tab === "shop"} onClick={() => setTab("shop")} />}
             {desktopAssistant && <NavItem icon={Bot} label="Assistent" active={tab === "assistant"} onClick={() => setTab("assistant")} />}
             <NavItem icon={RefreshCw} label="Backup" active={tab === "backup"} onClick={() => setTab("backup")} />
+            {desktopUpdates && <NavItem icon={Download} label="Updates" active={tab === "updates"} onClick={() => setTab("updates")} />}
 
             <div className="qwui-sidebar-footer" style={styles.sidebarFooter}>
               <a
@@ -2092,7 +2510,7 @@ export default function ReceiptApp() {
             className="qwui-main"
             style={{
               ...styles.main,
-              ...(tab === "receipts" ? { maxWidth: 880 } : {}),
+              ...(tab === "receipts" || tab === "quotes" ? { maxWidth: 880 } : {}),
               // Artikeltabelle, Exemplare und Bewegungen brauchen mehr Breite.
               ...(tab === "inventory" ? { maxWidth: 1040 } : {}),
               ...(tab === "shop" || tab === "assistant" || tab === "drafts" ? { maxWidth: 880 } : {}),
@@ -2100,10 +2518,75 @@ export default function ReceiptApp() {
           >
             {tab === "new" && (
               <div style={styles.panel}>
-                <Eyebrow>01 — Neue Quittung</Eyebrow>
+                <Eyebrow>{isQuoteForm ? "01 — Neue Offerte" : "01 — Neue Quittung"}</Eyebrow>
                 <h1 style={styles.h1}>
-                  {editingReceiptId ? "Quittung bearbeiten" : "Neue Quittung erstellen"}
+                  {editingReceiptId
+                    ? "Quittung bearbeiten"
+                    : editingQuoteId
+                      ? "Offerte bearbeiten"
+                      : isQuoteForm
+                        ? "Neue Offerte erstellen"
+                        : "Neue Quittung erstellen"}
                 </h1>
+                {!editingReceiptId && !editingQuoteId && !pendingOrder && !pendingQuote && (
+                  <div style={styles.kindSwitch} role="radiogroup" aria-label="Belegart">
+                    {[
+                      ["beleg", "Quittung / Rechnung"],
+                      ["offerte", "Offerte"],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        role="radio"
+                        aria-checked={formKind === value}
+                        onClick={() => setFormKind(value)}
+                        style={{ ...styles.kindSwitchBtn, ...(formKind === value ? styles.kindSwitchBtnOn : {}) }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {pendingQuote && !editingReceiptId && (
+                  <div style={styles.editBanner}>
+                    <span>
+                      Quittung aus der Offerte <span className="mono">{pendingQuote.number}</span>. «Quittung erstellen»
+                      bucht das Lager und markiert die Offerte als angenommen.
+                      {pendingQuote.warnings.map((w, i) => (
+                        <span key={i} style={{ display: "block", marginTop: 4, color: "#B5480C" }}>
+                          {w}
+                        </span>
+                      ))}
+                    </span>
+                    <button
+                      onClick={() => {
+                        resetForm();
+                        setTab("quotes");
+                      }}
+                      style={styles.linkBtn}
+                    >
+                      Abbrechen
+                    </button>
+                  </div>
+                )}
+                {editingQuoteId && (
+                  <div style={styles.editBanner}>
+                    <span>
+                      Du bearbeitest die Offerte{" "}
+                      <span className="mono">{quotes.find((q) => q.id === editingQuoteId)?.number}</span>. Die Nummer
+                      bleibt dabei unverändert.
+                    </span>
+                    <button
+                      onClick={() => {
+                        resetForm("offerte");
+                        setTab("quotes");
+                      }}
+                      style={styles.linkBtn}
+                    >
+                      Abbrechen
+                    </button>
+                  </div>
+                )}
                 {!editingReceiptId && !setupHidden && setupTodo.length > 0 && (
                   <div style={styles.setupBox}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
@@ -2168,6 +2651,25 @@ export default function ReceiptApp() {
                   />
                 </FieldGroup>
 
+                {isQuoteForm && (
+                  <FieldGroup label="Gültig bis">
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <input
+                        type="date"
+                        value={validUntil}
+                        onChange={(e) => setValidUntil(e.target.value)}
+                        style={{ width: 180 }}
+                        aria-label="Offerte gültig bis"
+                      />
+                      {[14, 30, 60].map((d) => (
+                        <button key={d} type="button" style={styles.secondaryBtnSmall} onClick={() => setValidUntil(addDaysISO(date, d))}>
+                          {d} Tage
+                        </button>
+                      ))}
+                    </div>
+                  </FieldGroup>
+                )}
+
                 <FieldGroup label="Kunde">
                   <Kundenwahl
                     customers={customers}
@@ -2177,13 +2679,13 @@ export default function ReceiptApp() {
                     onManualChange={setManualCustomer}
                     onSaveManual={saveManualCustomerToList}
                     emptyPerson={emptyPerson}
-                    qrBillEnabled={qrBillEnabled && !personHasAddress(activeCustomer)}
-                    addressRequired={needsAddress && !personHasAddress(activeCustomer)}
+                    qrBillEnabled={!isQuoteForm && qrBillEnabled && !personHasAddress(activeCustomer)}
+                    addressRequired={!isQuoteForm && needsAddress && !personHasAddress(activeCustomer)}
                   />
                 </FieldGroup>
 
                 <FieldGroup label="Leistungen">
-                  {inventory.length > 0 && (
+                  {inventory.length > 0 && !isQuoteForm && (
                     <div style={styles.saleScanBox}>
                       <input
                         value={saleScan}
@@ -2281,7 +2783,7 @@ export default function ReceiptApp() {
                               </label>
                             )}
 
-                            {product && serialTracked && (
+                            {product && serialTracked && !isQuoteForm && (
                               <label style={styles.itemMetaField}>
                                 <span style={styles.itemMetaLabel}>Seriennummer</span>
                                 <select
@@ -2308,7 +2810,7 @@ export default function ReceiptApp() {
                               </label>
                             )}
 
-                            {kind === "product" && !serialTracked && (
+                            {kind === "product" && (!serialTracked || isQuoteForm) && (
                               <label style={styles.itemMetaField}>
                                 <span style={styles.itemMetaLabel}>Menge</span>
                                 <input
@@ -2411,6 +2913,7 @@ export default function ReceiptApp() {
                     </div>
                   )}
 
+                  {!isQuoteForm && (
                   <button
                     onClick={() => setQrBillEnabled(!qrBillEnabled)}
                     style={styles.vatToggleRow}
@@ -2423,8 +2926,9 @@ export default function ReceiptApp() {
                       Bezahlbar per Rechnung <span style={styles.docMuted}>(QR-Einzahlungsschein)</span>
                     </span>
                   </button>
+                  )}
 
-                  {qrBillEnabled && (
+                  {qrBillEnabled && !isQuoteForm && (
                     <div style={styles.paymentTermRow}>
                       <span style={styles.paymentTermLabel}>Zahlbar innert</span>
                       <select
@@ -2443,7 +2947,7 @@ export default function ReceiptApp() {
                     </div>
                   )}
 
-                  {qrBillEnabled && (!isValidSwissIban(company.qrBill?.iban) || isQrIban(company.qrBill?.iban)) && (
+                  {qrBillEnabled && !isQuoteForm && (!isValidSwissIban(company.qrBill?.iban) || isQrIban(company.qrBill?.iban)) && (
                     <div style={styles.hint}>
                       Dafür brauchst du eine gültige IBAN unter{" "}
                       <button
@@ -2468,10 +2972,10 @@ export default function ReceiptApp() {
                 </FieldGroup>
 
                 <div style={{ marginBottom: 24 }}>
-                  <InterneKosten value={costsForm} onChange={setCostsForm} />
+                  {!isQuoteForm && <InterneKosten value={costsForm} onChange={setCostsForm} />}
                 </div>
 
-                {desktopMail && !editingReceiptId && (
+                {desktopMail && !editingReceiptId && !isQuoteForm && (
                   <FieldGroup label="Nach dem Erstellen">
                     <div style={{ display: "grid", gap: 8 }}>
                       <label style={styles.checkLabel}>
@@ -2519,7 +3023,7 @@ export default function ReceiptApp() {
                   disabled={!canCreate || creating}
                   style={{ ...styles.primaryBtn, opacity: canCreate && !creating ? 1 : 0.4 }}
                 >
-                  {editingReceiptId ? "Änderungen speichern" : "Quittung erstellen →"}
+                  {editingReceiptId || editingQuoteId ? "Änderungen speichern" : isQuoteForm ? "Offerte erstellen →" : "Quittung erstellen →"}
                 </button>
               </div>
             )}
@@ -3138,11 +3642,44 @@ export default function ReceiptApp() {
               <div style={styles.panel}>
                 <BuchhaltungTab
                   receipts={receipts}
+                  creditNotes={creditNotes}
                   onTogglePaid={togglePaid}
                   onOpen={openReceipt}
                   onEdit={startEditReceipt}
                   onDelete={deleteReceipt}
+                  onCredit={(r) => openReceipt(r, { credit: true })}
+                  onDeliveryNote={(r) => openReceipt(r, { view: "lieferschein" })}
+                  onDeleteCreditNote={deleteCreditNote}
                 />
+              </div>
+            )}
+
+            {tab === "quotes" && (
+              <div style={styles.panel}>
+                <Offerten
+                  quotes={quotes}
+                  today={todayISO()}
+                  onNew={() => {
+                    resetForm("offerte");
+                    setEditingReceiptId(null);
+                    setTab("new");
+                  }}
+                  onOpen={openReceipt}
+                  onEdit={startEditQuote}
+                  onAccept={startReceiptFromQuote}
+                  onSetStatus={setQuoteStatus}
+                  onDelete={deleteQuote}
+                  onOpenReceipt={(id) => {
+                    const r = receipts.find((x) => x.id === id);
+                    if (r) openReceipt(r);
+                  }}
+                />
+              </div>
+            )}
+
+            {tab === "updates" && desktopUpdates && (
+              <div style={styles.panel}>
+                <Updates />
               </div>
             )}
 
@@ -3248,8 +3785,18 @@ export default function ReceiptApp() {
                     <div style={{ fontSize: 12, color: "#5B5F66", marginBottom: 4 }}>
                       {importPreview.customers?.length || 0} Kunden,{" "}
                       {importPreview.receipts?.length || 0} Quittungen/Rechnungen
+                      {Array.isArray(importPreview.quotes) && importPreview.quotes.length > 0 && `, ${importPreview.quotes.length} Offerten`}
+                      {Array.isArray(importPreview.creditNotes) && importPreview.creditNotes.length > 0 && `, ${importPreview.creditNotes.length} Gutschriften`}
                       {Array.isArray(importPreview.serialUnits) && `, ${importPreview.serialUnits.length} Exemplare mit Seriennummer`}
                     </div>
+                    {!Array.isArray(importPreview.creditNotes) && creditNotes.length > 0 && (
+                      <div style={{ ...styles.hint, marginBottom: 10 }}>
+                        Diese Sicherung stammt aus einer Version vor 1.5.0 und enthält keine Gutschriften.{" "}
+                        {creditNotes.length === 1
+                          ? "Die vorhandene Gutschrift gehört zu den bisherigen Quittungen und wird beim Import entfernt — ihre Nummer bleibt vergeben."
+                          : `Die ${creditNotes.length} vorhandenen Gutschriften gehören zu den bisherigen Quittungen und werden beim Import entfernt — ihre Nummern bleiben vergeben.`}
+                      </div>
+                    )}
                     {!Array.isArray(importPreview.serialUnits) && (units.length > 0 || Object.keys(movementsByKey).length > 0) && (
                       <div style={{ ...styles.hint, marginBottom: 10 }}>
                         Diese Sicherung stammt aus einer Version vor 1.2.0 und enthält keine Exemplare
@@ -3292,18 +3839,99 @@ export default function ReceiptApp() {
         <div className="preview-wrap" style={styles.previewWrap}>
           <div className="no-print" style={styles.previewToolbar}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={backToForm} style={styles.secondaryBtn}>
-                <ArrowLeft size={14} /> Neue Quittung
-              </button>
-              <button onClick={() => startEditReceipt(currentReceipt)} style={styles.secondaryBtn}>
-                Bearbeiten
-              </button>
-              <ConfirmDeleteButton
-                label="Quittung löschen"
-                onConfirm={() => deleteReceipt(currentReceipt.id)}
-              />
+              {isCreditNote(currentReceipt) ? (
+                <>
+                  <button onClick={() => closePreview("receipts")} style={styles.secondaryBtn}>
+                    <ArrowLeft size={14} /> Zu den Belegen
+                  </button>
+                  {receipts.some((r) => r.id === currentReceipt.receiptId) && (
+                    <button
+                      onClick={() => openReceipt(receipts.find((r) => r.id === currentReceipt.receiptId))}
+                      style={styles.secondaryBtn}
+                    >
+                      {currentReceipt.receiptWord} Nr. {currentReceipt.receiptNumber} öffnen
+                    </button>
+                  )}
+                  <ConfirmDeleteButton label="Gutschrift löschen" onConfirm={() => deleteCreditNote(currentReceipt.id)} />
+                </>
+              ) : isQuote(currentReceipt) ? (
+                <>
+                  <button onClick={backToForm} style={styles.secondaryBtn}>
+                    <ArrowLeft size={14} /> Neue Offerte
+                  </button>
+                  {currentReceipt.status !== QUOTE_STATUS.accepted && (
+                    <>
+                      <button onClick={() => startEditQuote(currentReceipt)} style={styles.secondaryBtn}>
+                        Bearbeiten
+                      </button>
+                      <button onClick={() => startReceiptFromQuote(currentReceipt)} style={styles.primaryBtnSmall}>
+                        <Check size={14} /> Als Quittung übernehmen
+                      </button>
+                    </>
+                  )}
+                  {currentReceipt.status === QUOTE_STATUS.open && (
+                    <button onClick={() => setQuoteStatus(currentReceipt.id, QUOTE_STATUS.declined)} style={styles.secondaryBtn}>
+                      Abgelehnt
+                    </button>
+                  )}
+                  {currentReceipt.status === QUOTE_STATUS.declined && (
+                    <button onClick={() => setQuoteStatus(currentReceipt.id, QUOTE_STATUS.open)} style={styles.secondaryBtn}>
+                      Wieder offen
+                    </button>
+                  )}
+                  <ConfirmDeleteButton label="Offerte löschen" onConfirm={() => deleteQuote(currentReceipt.id)} />
+                </>
+              ) : (
+                <>
+                  <button onClick={backToForm} style={styles.secondaryBtn}>
+                    <ArrowLeft size={14} /> Neue Quittung
+                  </button>
+                  <button onClick={() => startEditReceipt(currentReceipt)} style={styles.secondaryBtn}>
+                    Bearbeiten
+                  </button>
+                  {/* Nur, solange noch etwas gutzuschreiben ist (wie unter Belege). */}
+                  {creditableLines(currentReceipt, creditNotes).some((l) => l.remaining > 0) && (
+                    <button
+                      onClick={() => {
+                        setPreviewView("beleg");
+                        setCreditFormOpen(true);
+                      }}
+                      style={styles.secondaryBtn}
+                    >
+                      <Undo2 size={14} /> Gutschrift / Retoure
+                    </button>
+                  )}
+                  <ConfirmDeleteButton
+                    label="Quittung löschen"
+                    onConfirm={() => deleteReceipt(currentReceipt.id)}
+                  />
+                </>
+              )}
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {!isQuote(currentReceipt) && !isCreditNote(currentReceipt) && (
+                <div style={styles.previewViewSwitch} role="radiogroup" aria-label="Ansicht">
+                  {[
+                    ["beleg", documentWord(currentReceipt)],
+                    ["lieferschein", "Lieferschein"],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={previewView === value}
+                      onClick={() => {
+                        setPreviewView(value);
+                        if (value === "lieferschein") setCreditFormOpen(false);
+                      }}
+                      style={{ ...styles.kindSwitchBtn, ...(previewView === value ? styles.kindSwitchBtnOn : {}) }}
+                    >
+                      {value === "lieferschein" && <Truck size={12} style={{ marginRight: 4, verticalAlign: -2 }} />}
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <button onClick={downloadPdf} style={styles.secondaryBtn} disabled={generatingPdf}>
                 <Printer size={14} /> {generatingPdf ? "Erstelle PDF…" : "PDF herunterladen"}
               </button>
@@ -3315,22 +3943,43 @@ export default function ReceiptApp() {
                   <Share2 size={14} /> {sharing ? "Bereite vor…" : "Teilen"}
                 </button>
               )}
-              <button
-                onClick={() =>
-                  !desktopMail && currentReceipt.customer.email
-                    ? sendMail()
-                    : setMailState({ state: "form", to: mailState.to || currentReceipt.customer.email || "", error: "" })
-                }
-                style={styles.primaryBtnSmall}
-                disabled={mailState.state === "sending"}
-              >
-                <Mail size={14} /> {mailState.state === "sending" ? "Sende…" : "Per E-Mail senden"}
-              </button>
-              <button onClick={sendWhatsApp} style={styles.whatsappBtn}>
-                <MessageCircle size={14} /> Per WhatsApp senden
-              </button>
+              {!deliveryView && (
+                <>
+                  <button
+                    onClick={() =>
+                      !desktopMail && currentReceipt.customer.email
+                        ? sendMail()
+                        : setMailState({ state: "form", to: mailState.to || currentReceipt.customer.email || "", error: "" })
+                    }
+                    style={styles.primaryBtnSmall}
+                    disabled={mailState.state === "sending"}
+                  >
+                    <Mail size={14} /> {mailState.state === "sending" ? "Sende…" : "Per E-Mail senden"}
+                  </button>
+                  <button onClick={sendWhatsApp} style={styles.whatsappBtn}>
+                    <MessageCircle size={14} /> Per WhatsApp senden
+                  </button>
+                </>
+              )}
             </div>
           </div>
+          <DocumentLinks
+            doc={currentReceipt}
+            receipts={receipts}
+            quotes={quotes}
+            creditNotes={creditNotes}
+            today={todayISO()}
+            onOpen={(d) => openReceipt(d)}
+          />
+          {creditFormOpen && !isQuote(currentReceipt) && !isCreditNote(currentReceipt) && (
+            <GutschriftForm
+              receipt={currentReceipt}
+              creditNotes={creditNotes}
+              today={todayISO()}
+              onCreate={(selection, opts) => createCreditNote(currentReceipt, selection, opts)}
+              onCancel={() => setCreditFormOpen(false)}
+            />
+          )}
           {stockWarnings.length > 0 && (
             <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 12px" }} role="status">
               {stockWarnings.map((m, i) => (
@@ -3338,7 +3987,7 @@ export default function ReceiptApp() {
               ))}
             </div>
           )}
-          {(mailState.state !== "idle" || (desktopMail && currentReceipt.emailDelivery)) && (
+          {!deliveryView && (mailState.state !== "idle" || (desktopMail && currentReceipt.emailDelivery)) && (
             <div className="no-print" style={styles.mailBox}>
               {(mailState.state === "form" || mailState.state === "error") && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -3384,12 +4033,12 @@ export default function ReceiptApp() {
               )}
             </div>
           )}
-          {!desktopMail && !currentReceipt.customer.email && (
+          {!deliveryView && !desktopMail && !currentReceipt.customer.email && (
             <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 12px" }}>
               Für diesen Kunden ist keine E-Mail-Adresse hinterlegt — unter «Per E-Mail senden» lässt sie sich für diesen Versand eintragen.
             </div>
           )}
-          {!currentReceipt.customer.phone && (
+          {!deliveryView && !currentReceipt.customer.phone && (
             <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 12px" }}>
               Für diesen Kunden ist keine Telefonnummer hinterlegt — WhatsApp öffnet sich ohne
               vorausgewählten Kontakt, du wählst ihn dann manuell aus.
@@ -3399,7 +4048,7 @@ export default function ReceiptApp() {
             Tipp für eine saubere PDF ohne Titel/URL am Seitenrand: Im Druckdialog unten auf
             „Mehr Einstellungen" klicken und „Kopf- und Fusszeilen" abwählen.
           </div>
-          {!desktopMail && (
+          {!desktopMail && !deliveryView && (
           <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 8px" }}>
             Hinweis: „Per E-Mail senden" öffnet dein E-Mail-Programm mit vorausgefülltem Text. Da Browser aus
             Sicherheitsgründen keine automatischen Anhänge erlauben, lade die Quittung zuerst über den Button
@@ -3407,12 +4056,14 @@ export default function ReceiptApp() {
             {canShareFiles ? ' — oder nutze stattdessen „Teilen" (siehe unten).' : "."}
           </div>
           )}
+          {!deliveryView && (
           <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 20px" }}>
             Hinweis: „Per WhatsApp senden" öffnet WhatsApp (App oder WhatsApp Web) mit fertig
             eingetragenem Text — als reine Nachricht, ohne PDF-Anhang. Welche WhatsApp-Version sich
             öffnet (privat oder Business), entscheidet dein Betriebssystem, nicht dieses Tool — ist
             nur WhatsApp Business installiert, öffnet sich automatisch diese.
           </div>
+          )}
           {canShareFiles && (
             <div className="no-print" style={{ ...styles.hint, maxWidth: 640, margin: "0 auto 20px" }}>
               Tipp: Der Button „Teilen" öffnet den Teilen-Dialog deines Geräts und übergibt die
@@ -3421,15 +4072,63 @@ export default function ReceiptApp() {
             </div>
           )}
 
-          <ReceiptDocument receipt={currentReceipt} />
-          {currentReceipt.qrBillEnabled && (
+          <ReceiptDocument receipt={previewDoc} />
+          {previewDoc.qrBillEnabled && (
             <div className="no-print" style={{ textAlign: "center", margin: "16px 0" }}>
               <span style={styles.docMuted}>↓ QR-Rechnung — wird sowohl beim PDF-Download als auch beim Drucken mit ausgegeben</span>
             </div>
           )}
-          {currentReceipt.qrBillEnabled && <QrBillDocument receipt={currentReceipt} />}
+          {previewDoc.qrBillEnabled && <QrBillDocument receipt={previewDoc} />}
         </div>
       )}
+    </div>
+  );
+}
+
+// Bezüge eines Belegs über der Vorschau: Gutschriften zu einer Quittung, die
+// Offerte, aus der sie entstand, und bei einer Offerte ihr Stand.
+function DocumentLinks({ doc, receipts, quotes, creditNotes, today, onOpen }) {
+  const links = [];
+  if (isQuote(doc)) {
+    const state = quoteState(doc, today);
+    links.push(<span key="state" style={styles.statusPill}>{QUOTE_STATE_LABEL[state]}</span>);
+    const receipt = doc.receiptId ? receipts.find((r) => r.id === doc.receiptId) : null;
+    if (receipt) {
+      links.push(
+        <button key="r" type="button" style={styles.linkBtn} onClick={() => onOpen(receipt)}>
+          {documentWord(receipt)} Nr. {receipt.number} öffnen
+        </button>
+      );
+    }
+  } else if (!isCreditNote(doc)) {
+    const source = doc.fromQuote ? quotes.find((q) => q.id === doc.fromQuote.id) : null;
+    if (source) {
+      links.push(
+        <button key="q" type="button" style={styles.linkBtn} onClick={() => onOpen(source)}>
+          aus Offerte {source.number}
+        </button>
+      );
+    }
+    const credits = creditNotesFor(creditNotes, doc.id);
+    if (credits.length) {
+      links.push(
+        <span key="c">
+          Gutschriften (CHF {chf(creditTotalFor(creditNotes, doc.id))}):
+        </span>
+      );
+      credits.forEach((c) =>
+        links.push(
+          <button key={c.id} type="button" style={styles.linkBtn} onClick={() => onOpen(c)}>
+            {c.number}
+          </button>
+        )
+      );
+    }
+  }
+  if (!links.length) return null;
+  return (
+    <div className="no-print" style={styles.docLinks}>
+      {links}
     </div>
   );
 }
@@ -3453,11 +4152,18 @@ function ReceiptDocument({ receipt }) {
   );
   const titleBlock = (
     <div style={{ textAlign: "right" }}>
-      <div style={styles.docTitle}>{receipt.qrBillEnabled ? "RECHNUNG" : "QUITTUNG"}</div>
-      <div className="mono" style={styles.docNumber}>Nr. {receipt.number}</div>
+      <div style={styles.docTitle}>{documentWord(receipt).toUpperCase()}</div>
+      <div className="mono" style={styles.docNumber}>{docNumberLine(receipt)}</div>
       <div className="mono" style={styles.docMuted}>{formatDateDE(receipt.date)}</div>
+      {docMetaLines(receipt).map((l) => (
+        <div key={l} className="mono" style={styles.docMuted}>
+          {l}
+        </div>
+      ))}
     </div>
   );
+  const deliveryNote = isDeliveryNote(receipt);
+  const closing = docClosing(receipt, company);
 
   return (
     <div className="print-area" style={styles.document}>
@@ -3488,16 +4194,46 @@ function ReceiptDocument({ receipt }) {
       <div style={styles.docRule} />
 
       <div style={styles.docSection}>
-        <div style={styles.docLabel}>Empfänger</div>
+        <div style={styles.docLabel}>{recipientLabel(receipt)}</div>
         <div style={{ fontWeight: 600 }}>{receipt.customer.name}</div>
         {personAddressLines(receipt.customer).map((l, i) => (
           <div style={styles.docMuted} key={i}>{l}</div>
         ))}
         {receipt.customer.email && <div style={styles.docMuted}>{receipt.customer.email}</div>}
+        {deliveryNote && receipt.customer.phone && <div style={styles.docMuted}>{receipt.customer.phone}</div>}
       </div>
 
+      {deliveryNote ? (
+        <div style={styles.docSection}>
+          <div style={styles.docLabel}>{itemsLabel(receipt)}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 6 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #DADDE1" }}>
+                <th style={styles.docThQty}>Menge</th>
+                <th style={styles.docTh}>Artikel</th>
+                <th style={styles.docTh}>Art.-Nr.</th>
+                <th style={styles.docTh}>Seriennummer</th>
+              </tr>
+            </thead>
+            <tbody>
+              {receipt.items.map((it) => (
+                <tr key={it.id} style={{ borderBottom: "1px solid #EDEEEF" }}>
+                  <td className="mono" style={{ padding: "6px 8px 6px 0", fontSize: 13, textAlign: "right", width: 56 }}>
+                    {formatPercent(itemQuantity(it))}
+                  </td>
+                  <td style={{ padding: "6px 0", fontSize: 13 }}>{it.description}</td>
+                  <td className="mono" style={{ padding: "6px 0", fontSize: 12, color: "#70747C" }}>
+                    {itemKind(it) === "product" ? it.articleNumber || "" : ""}
+                  </td>
+                  <td className="mono" style={{ padding: "6px 0", fontSize: 12, color: "#70747C" }}>{it.serial || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
       <div style={styles.docSection}>
-        <div style={styles.docLabel}>Leistung</div>
+        <div style={styles.docLabel}>{itemsLabel(receipt)}</div>
         <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 6 }}>
           <tbody>
             {receipt.items.map((it) => {
@@ -3549,17 +4285,18 @@ function ReceiptDocument({ receipt }) {
               <span className="mono">CHF {chf(receipt.vatAmount)}</span>
             </div>
             <div style={styles.totalLine}>
-              <span>Total (inkl. MWST)</span>
+              <span>{totalLabel(receipt)}</span>
               <span className="mono" style={styles.totalAmount}>CHF {chf(receipt.total)}</span>
             </div>
           </div>
         ) : (
           <div style={styles.totalLine}>
-            <span>Total</span>
+            <span>{totalLabel(receipt)}</span>
             <span className="mono" style={styles.totalAmount}>CHF {chf(receipt.total)}</span>
           </div>
         )}
       </div>
+      )}
 
       {receipt.note && (
         <div style={styles.docSection}>
@@ -3568,6 +4305,15 @@ function ReceiptDocument({ receipt }) {
         </div>
       )}
 
+      {closing ? (
+        <div style={{ ...styles.docSection, marginTop: 24 }}>
+          <div style={{ fontSize: 13 }}>{closing.text}</div>
+          <div style={styles.signatureLine}>
+            <span style={styles.docMuted}>{closing.signatureLabel}</span>
+            <span style={{ fontStyle: "italic" }}>{closing.signer}</span>
+          </div>
+        </div>
+      ) : (
       <div style={{ ...styles.docSection, marginTop: 24 }}>
         {receipt.qrBillEnabled ? (
           <div style={{ fontSize: 13 }}>
@@ -3584,6 +4330,7 @@ function ReceiptDocument({ receipt }) {
           <span style={{ fontStyle: "italic" }}>{receipt.company.name}</span>
         </div>
       </div>
+      )}
 
       <DocumentFooter company={company} />
     </div>
@@ -4087,6 +4834,9 @@ const styles = {
   logoPreviewBar: { display: "block", width: 60, height: 4, background: "#DADDE1" },
   logoPreviewBarStrong: { display: "block", width: 74, height: 6, background: "#9AA0A6" },
   docArticleNr: { fontSize: 11, color: "#8B8F96" },
+  docTh: { textAlign: "left", fontSize: 10, fontWeight: 600, color: "#8B8F96", textTransform: "uppercase", letterSpacing: "0.06em", padding: "4px 0" },
+  docThQty: { textAlign: "right", fontSize: 10, fontWeight: 600, color: "#8B8F96", textTransform: "uppercase", letterSpacing: "0.06em", padding: "4px 8px 4px 0", width: 56 },
+  docLinks: { maxWidth: 640, margin: "0 auto 12px", fontSize: 12, color: "#5B5F66", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
   docListPriceCell: { padding: "6px 8px", fontSize: 12, textAlign: "right", whiteSpace: "nowrap" },
   docDiscountCell: { padding: "6px 8px", fontSize: 12, textAlign: "right", whiteSpace: "nowrap", color: "#1D7A3C" },
   docStrike: { textDecoration: "line-through", color: "#8B8F96" },
@@ -4289,6 +5039,19 @@ const styles = {
     fontWeight: 600,
     cursor: "pointer",
   },
+  kindSwitch: { display: "inline-flex", border: "1px solid #DADDE1", marginBottom: 20, background: "#fff" },
+  kindSwitchBtn: {
+    background: "transparent",
+    color: "#5B5F66",
+    border: "none",
+    padding: "8px 14px",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  kindSwitchBtnOn: { background: "#16181D", color: "#fff" },
+  previewViewSwitch: { display: "inline-flex", border: "1px solid #DADDE1", background: "#fff" },
+  statusPill: { fontSize: 11, fontWeight: 600, padding: "3px 8px", background: "#F1F1EF", color: "#5B5F66" },
   editBanner: {
     display: "flex",
     justifyContent: "space-between",

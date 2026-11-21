@@ -7,10 +7,12 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { copyFileSync } from "node:fs";
+import { copyFileSync, readFileSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..", "..");
+// Die Erweiterung meldet dieselbe Version wie die Windows-App.
+const { version } = JSON.parse(readFileSync(resolve(__dirname, "..", "package.json"), "utf8"));
 
 await build({
   entryPoints: [resolve(root, "mcp", "server.js")],
@@ -22,6 +24,7 @@ await build({
   // das nur über createRequire.
   banner: { js: "import { createRequire as __qwuiCreateRequire } from \"node:module\"; const require = __qwuiCreateRequire(import.meta.url);" },
   target: "node20",
+  define: { __QWUI_VERSION__: JSON.stringify(version) },
   minify: true,
   legalComments: "none",
   logLevel: "warning",

@@ -14,6 +14,7 @@ import { itemLineTotal, quantityPrefix } from "./shared/items.js";
 import { UNIT_STATUS_LABEL } from "./shared/serials.js";
 import { MOVEMENT_TYPE_LABEL, productStock, isSerialTracked } from "./shared/stock.js";
 import { costTotals, sumCosts } from "./shared/internalCosts.js";
+import { creditTotalFor, openAmount, refundLabel } from "./shared/documents.js";
 
 const SOURCE_LABEL = { app: "App", assistent: "Assistent" };
 
@@ -40,8 +41,17 @@ function addSheet(wb, name, columns, rows) {
   return sheet;
 }
 
-// data: { customers, receipts, inventory, units, movements }
-export function buildEvaluationWorkbook({ customers = [], receipts = [], inventory = [], units = [], movements = [] }) {
+// Offene Rechnung, die Gutschriften ganz ausgleichen, ist nicht mehr offen.
+function paymentStatus(r, creditNotes) {
+  const { label } = statusInfo(r);
+  if (label.startsWith("Offen") && creditTotalFor(creditNotes, r.id) > 0 && openAmount(r, creditNotes) === 0) {
+    return "Ausgeglichen (Gutschrift)";
+  }
+  return label;
+}
+
+// data: { customers, receipts, inventory, units, movements, creditNotes, quotes }
+export function buildEvaluationWorkbook({ customers = [], receipts = [], inventory = [], units = [], movements = [], creditNotes = [], quotes = [] }) {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Qwui";
   const productById = new Map(inventory.map((p) => [p.id, p]));
@@ -81,8 +91,9 @@ export function buildEvaluationWorkbook({ customers = [], receipts = [], invento
       ["Kunden-ID", "customerId", 12],
       ["Positionen", "items", 44],
       ["Betrag (CHF)", "total", 14, "#,##0.00"],
+      ["Gutschriften (CHF)", "credited", 16, "#,##0.00"],
       ["MWST enthalten", "vat", 14],
-      ["Zahlungsstatus", "status", 20],
+      ["Zahlungsstatus", "status", 22],
       ["Fällig am", "due", 12],
       ["E-Mail-Versand", "mail", 16],
     ],
@@ -98,8 +109,9 @@ export function buildEvaluationWorkbook({ customers = [], receipts = [], invento
           .map((it) => `${quantityPrefix(it)}${it.description}${it.serial ? ` (S/N ${it.serial})` : ""}: CHF ${chf(itemLineTotal(it)).toFixed(2)}`)
           .join("; "),
         total: chf(r.total),
+        credited: creditTotalFor(creditNotes, r.id) ? -creditTotalFor(creditNotes, r.id) : null,
         vat: r.vatEnabled ? "Ja" : "Nein",
-        status: statusInfo(r).label,
+        status: paymentStatus(r, creditNotes),
         due: r.qrBillEnabled && r.date ? addDaysISO(r.date, paymentTermOf(r)) : "",
         mail: r.emailDelivery
           ? `${r.emailDelivery.status} ${dateOnly(r.emailDelivery.at)}${r.emailDelivery.beforeEdit ? " (frühere Fassung)" : ""}`
@@ -152,6 +164,64 @@ export function buildEvaluationWorkbook({ customers = [], receipts = [], invento
       ...(withCosts.length ? [{ customer: "Total", km: costSum.km, travel: costSum.travel, material: costSum.material, total: costSum.total }] : []),
     ]
   );
+
+  // Ab 1.5.0: Gutschriften (Rücknahmen) und Offerten.
+  if (creditNotes.length) {
+    addSheet(
+      wb,
+      "Gutschriften",
+      [
+        ["Datum", "date", 12],
+        ["Nr.", "number", 10],
+        ["zu Beleg", "receipt", 16],
+        ["Kunde", "customer", 22],
+        ["Positionen", "items", 44],
+        ["Betrag (CHF)", "total", 14, "#,##0.00"],
+        ["Rückerstattung", "refund", 16],
+        ["Grund", "note", 28],
+      ],
+      [...creditNotes]
+        .sort((a, b) => (a.date || "").localeCompare(b.date || "") || String(a.number).localeCompare(String(b.number)))
+        .map((c) => ({
+          date: c.date || "",
+          number: c.number || "",
+          receipt: `${c.receiptWord || "Quittung"} ${c.receiptNumber || ""}`,
+          customer: c.customer?.name || "",
+          items: (c.items || [])
+            .map((it) => `${quantityPrefix(it)}${it.description}${it.serial ? ` (S/N ${it.serial})` : ""}${it.restock ? ", zurück ins Lager" : ""}`)
+            .join("; "),
+          total: -chf(c.total),
+          refund: refundLabel(c),
+          note: c.note || "",
+        }))
+    );
+  }
+  if (quotes.length) {
+    addSheet(
+      wb,
+      "Offerten",
+      [
+        ["Datum", "date", 12],
+        ["Nr.", "number", 10],
+        ["Kunde", "customer", 22],
+        ["Gültig bis", "validUntil", 12],
+        ["Betrag (CHF)", "total", 14, "#,##0.00"],
+        ["Stand", "status", 14],
+        ["Quittung", "receipt", 10],
+      ],
+      [...quotes]
+        .sort((a, b) => (a.date || "").localeCompare(b.date || "") || String(a.number).localeCompare(String(b.number)))
+        .map((q) => ({
+          date: q.date || "",
+          number: q.number || "",
+          customer: q.customer?.name || "",
+          validUntil: q.validUntil || "",
+          total: chf(q.total),
+          status: q.status || "offen",
+          receipt: q.receiptNumber || "",
+        }))
+    );
+  }
 
   addSheet(
     wb,

@@ -46,7 +46,7 @@ export function filterReceipts(receipts, { year, month = "all", query = "" } = {
     });
 }
 
-// Kunden suchen: Name, E-Mail, Telefon, Ort. Treffer am Wortanfang zuerst.
+// Kunden suchen: Name, E-Mail, Telefon, PLZ, Ort. Treffer am Wortanfang zuerst.
 export function searchCustomers(customers, query, limit = 8) {
   const q = norm(query);
   const list = customers || [];
@@ -57,7 +57,7 @@ export function searchCustomers(customers, query, limit = 8) {
   const scored = [];
   for (const c of list) {
     const name = norm(c.name);
-    const fields = [name, norm(c.email), norm(c.city), norm(c.zipCity)];
+    const fields = [name, norm(c.email), norm(c.postalCode), norm(c.city)];
     const phoneDigits = national(c.phone || "");
     let score = 0;
     if (name.startsWith(q)) score = 3;

@@ -170,9 +170,14 @@ async function recordFailedAttempt(db, ip) {
 // aus an, und request.json() interessiert sich nicht für den Content-Type —
 // eine per enctype="text/plain" verschickte Nutzlast reicht also aus, um im
 // Namen des eingeloggten Nutzers Kunden oder Quittungen zu überschreiben.
+//
+// Bewusst für JEDEN Pfad, nicht nur für «/api/…»: Cloudflare Pages ordnet
+// die Funktionen ohne Rücksicht auf Gross-/Kleinschreibung zu — «/API/storage»
+// landet ebenfalls in functions/api/storage.js. Eine Prüfung nur auf das
+// Präfix «/api/» liesse sich so umgehen. Die statischen Seiten nehmen ohnehin
+// nur GET an.
 function isCrossSiteWrite(request) {
   const url = new URL(request.url);
-  if (!url.pathname.startsWith("/api/")) return false;
   if (request.method === "GET" || request.method === "HEAD") return false;
 
   // Von modernen Browsern gesetzt; "same-origin" bzw. "none" (direkter Aufruf)

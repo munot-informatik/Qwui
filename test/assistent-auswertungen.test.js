@@ -87,6 +87,18 @@ describe("umsatz_auswerten", () => {
     expect(r).toMatchObject({ receiptCount: 2, total: 20 });
     expect(r.topArticles).toEqual([{ articleNumber: "KR-01", name: "Kreide", quantity: 5, revenue: 20 }]);
   });
+
+  it("zieht Gutschriften im Zeitraum ab, auch beim offenen Betrag", () => {
+    const creditNotes = [
+      { id: "g1", receiptId: "r1", date: "2027-02-15", total: 890, customer, items: [{ kind: "product", productId: "q", description: "Predator Revo", amount: "890", quantity: 1 }] },
+      { id: "g2", receiptId: "r2", date: "2027-02-20", total: 15, customer, items: [{ kind: "service", description: "Queue-Service", amount: "15", quantity: 1 }] },
+      { id: "g3", receiptId: "r3", date: "2027-03-05", total: 4, customer, items: [] },
+    ];
+    const r = salesReport(receipts, inventory, { from: "2027-02-01", to: "2027-02-28" }, creditNotes);
+    expect(r).toMatchObject({ grossTotal: 943, creditNotes: 905, creditNoteCount: 2, total: 38, openInvoices: 30 });
+    expect(r.topArticles.find((a) => a.articleNumber === "PRED-REVO")).toMatchObject({ quantity: 0, revenue: 0 });
+    expectNoPersonalData(r);
+  });
 });
 
 describe("ladenhueter", () => {
@@ -113,6 +125,9 @@ describe("Entwürfe", () => {
   it("verlangt Artikel und Menge", () => {
     expect(() => makeGoodsInDraft({ quantity: 3 }, ctx)).toThrow(/Artikel/);
     expect(() => makeGoodsInDraft({ article: "KR-01", quantity: 0 }, ctx)).toThrow(/Menge/);
+    // Der Wareneingang der App bucht nur ganze Stück.
+    expect(() => makeGoodsInDraft({ article: "KR-01", quantity: 1.5 }, ctx)).toThrow(/ganze Menge/);
+    expect(makeGoodsInDraft({ article: "KR-01", quantity: "4" }, ctx).payload.quantity).toBe(4);
   });
 
   it("legt einen Artikel mit Shop-Text an und prüft den Preis", () => {

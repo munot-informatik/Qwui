@@ -3,6 +3,108 @@
 Alle nennenswerten Änderungen an Qwui. Versionsnummern folgen der Web- und
 Desktop-Version gemeinsam (`package.json` und `desktop/package.json`).
 
+## Unveröffentlicht (geplant als 1.5.0)
+
+### Offerten
+
+- In **«Neue Quittung»** oben die Belegart **«Offerte»** wählen: gleiche
+  Positionen, Kunde und MWST wie bei der Quittung, dazu **«Gültig bis»**
+  (Vorgabe 30 Tage). Eine Offerte bucht kein Lager und hat eigene Nummern
+  (O-0001, O-0002, …).
+- Neuer Bereich **«Offerten»** mit Suche und Stand: offen, abgelaufen,
+  angenommen, abgelehnt. PDF, Drucken, E-Mail und WhatsApp wie bei der
+  Quittung.
+- **«Als Quittung übernehmen»** füllt das Quittungsformular mit Kunde und
+  Positionen. Artikel mit Seriennummer stehen dort einzeln, das Exemplar wählt
+  man beim Verkauf. Erst die Quittung bucht das Lager; die Offerte gilt dann als
+  angenommen und verweist auf die Quittung.
+
+### Gutschriften bei Retouren
+
+- Bei jeder Quittung oder Rechnung: **«Gutschrift / Retoure»**. Positionen und
+  Menge wählen, je Produkt «zurück ins Lager» oder nicht (z. B. defekt), dazu
+  die Rückerstattung: bar, Überweisung oder mit der Rechnung verrechnet.
+- Die Gutschrift ist ein eigener Beleg (G-0001, …) mit PDF und Versand.
+  Zurückgenommene Ware geht als Lagerbewegung «Retoure» in den Bestand,
+  Exemplare mit Seriennummer stehen wieder «an Lager» oder auf «retourniert».
+- Es lässt sich nie mehr gutschreiben, als verkauft wurde. Eine Quittung mit
+  Gutschrift bleibt, wie sie ist (nicht mehr bearbeiten oder löschen). Wird
+  eine Gutschrift gelöscht, kehrt Qwui die Rücknahme um — ausser ein Exemplar
+  ist inzwischen weiterverkauft.
+- **Belege** zeigen Gutschriften als eigene Zeilen und ziehen sie vom Total ab.
+  Bei einer offenen Rechnung zählt nur noch der Rest als offen; die Mahnung
+  und ihr Einzahlungsschein verlangen genau diesen Rest.
+- Der Assistent rechnet den Umsatz nach Abzug der Gutschriften. Die
+  Excel-Auswertung (Windows) hat neu die Blätter «Gutschriften» und
+  «Offerten».
+
+### Lieferscheine
+
+- In der Vorschau einer Quittung oder Rechnung umschalten auf
+  **«Lieferschein»**: Lieferadresse, Menge, Artikel, Artikelnummer und
+  Seriennummer, ohne Preise und ohne Einzahlungsschein, mit Feld für die
+  Empfangsbestätigung. Hat der Beleg Produkte, stehen nur diese darauf (ohne
+  Versandkosten oder Montage). Bei Online-Bestellungen steht die
+  Bestellnummer mit drauf.
+- Unter **Belege** gibt es dafür bei jedem Beleg den Knopf «Lieferschein».
+
+### Automatische Updates (Windows)
+
+- Neue Seite **Einstellungen → Updates**: Qwui sucht alle 6 Stunden bei GitHub
+  nach einer neuen Version (abschaltbar) und zeigt oben einen Hinweis, sobald
+  eine bereitsteht. Übertragen wird dabei nur die Anfrage, keine Daten.
+- **«Jetzt aktualisieren»** lädt die neue .exe, prüft ihre SHA-256-Prüfsumme,
+  sichert vorher noch einmal (falls eingerichtet), ersetzt die laufende Datei
+  unter ihrem bisherigen Namen und startet neu. Verknüpfungen und der Ordner
+  «Qwui-Daten» bleiben, wie sie sind.
+- Wer noch 1.4.0 hat, installiert 1.5.0 ein letztes Mal von Hand.
+
+### Behoben
+
+- **Assistent:** Ein Wareneingang-Vorschlag über eine gebrochene Menge
+  (z. B. 1.5 Stück) liess sich nie übernehmen. Jetzt sind nur ganze Stück
+  erlaubt.
+- **Shop-Bestellungen:** Eine gebuchte Bestellung konnte ein zweites Mal als
+  Vorschlag erscheinen, wenn die Meldung «gebucht» noch nicht beim Shop
+  angekommen war und der erledigte Vorschlag inzwischen aus der Liste fiel.
+- **Shop:** Der Webhook liess sich nicht ausschalten, solange «Bestellungen
+  abholen» an war. «Jetzt abgleichen» verwarf ungespeicherte Eingaben im
+  Formular.
+- **Backup:** Eine präparierte Sicherungsdatei konnte Qwui beim Öffnen mit
+  extremen Schlüsselwerten lahmlegen; die Werte sind jetzt begrenzt.
+- **Kunden:** Die Suche findet Kunden jetzt auch über die Postleitzahl.
+- **Web, Sicherheit:** Der Schutz gegen Schreibzugriffe von fremden Seiten
+  liess sich mit einem gross geschriebenen Pfad umgehen (`/API/storage` statt
+  `/api/storage` — Cloudflare leitet beide an die Speicher-API weiter). Eine
+  fremde Seite hätte so bei angemeldetem Browser z. B. die IBAN in den
+  Firmendaten überschreiben können. Die Prüfung gilt jetzt für jeden Pfad, und
+  die Speicher-API nimmt nur noch JSON an.
+- **Windows, Sicherheit:** Eine präparierte Sicherung konnte über einen
+  Logo-Verweis wie `..\..\geheim.bin` eine beliebige Datei als «Logo» einlesen.
+  Gelesen werden nur noch die Logo-Dateien, die Qwui selbst abgelegt hat.
+- **Belege:** Lagen Rechnung und Gutschrift in verschiedenen Monaten, stimmten
+  «davon offen» und «davon bezahlt» nicht (die Gutschrift erschien im Monat der
+  Rechnung als bezahlt).
+- **Offerten:** Wird die Quittung aus einer Offerte gelöscht, ist die Offerte
+  wieder offen, statt für immer auf «angenommen» zu stehen.
+- **Import:** Eine Sicherung von vor 1.5.0 ersetzt Quittungen und Exemplare;
+  die bisherigen Gutschriften dazu werden jetzt mit entfernt (die Vorschau
+  sagt es), statt auf nicht mehr vorhandene Rücknahmen zu zeigen. Angenommene
+  Offerten, deren Quittung danach fehlt, sind wieder offen.
+- **QR-Rechnung:** «Zahlbar durch» zeigt Name und Adresse nur noch, wenn sie
+  auch im QR-Code stehen (Name, PLZ und Ort); sonst ein leeres Feld mit
+  Eckmarken zum Ausfüllen, wie es die Vorgaben verlangen.
+- **Excel-Auswertung:** Im Blatt «Zahlungen» stehen die Gutschriften je
+  Rechnung; eine ganz ausgeglichene Rechnung gilt nicht mehr als offen.
+- **Assistent:** Offene Rechnungen mit Produktgruppe ziehen die Gutschriften
+  jetzt ebenfalls ab. Die Erweiterung für Claude Desktop meldet die Version
+  der App statt fest 1.4.0.
+- **Gutschrift:** Ohne Datum lässt sie sich nicht mehr erstellen; der Knopf
+  «Gutschrift / Retoure» fehlt, wenn schon alles gutgeschrieben ist.
+- Windows-Paket: Abhängigkeiten aktualisiert (u. a. Sicherheitskorrektur in
+  `brace-expansion`). Web: Entwicklungswerkzeuge (vite, vitest, wrangler)
+  aktualisiert.
+
 ## 1.4.0 — 10. November 2026
 
 ### Bestellungen aus dem Online-Shop

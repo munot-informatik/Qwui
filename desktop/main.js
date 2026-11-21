@@ -36,6 +36,8 @@ import { writeEvaluation } from "./excelExport.js";
 import { recognizeText } from "./ocr.js";
 import { buildMcpb } from "./mcpbExport.js";
 import { extractSerialCandidates } from "./shared/serialOcr.js";
+import { createUpdater, cleanupLeftovers, RELEASES_PAGE } from "./updater.js";
+import { spawn } from "node:child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -189,6 +191,7 @@ if (!gotLock) {
 
   ipcMain.handle("storage:delete", async (_event, key, shared) => {
     const result = await store.delete(key);
+    afterWrite([key]);
     return { ...result, shared };
   });
 
@@ -281,6 +284,10 @@ if (!gotLock) {
       movementsByKey,
       settings: { smtp: readSmtpSettings(), backup: { dir, enabled } },
       lastReceiptNumber: await read("receipt-last-number", 0),
+      quotes: await read("quotes-list", []),
+      lastQuoteNumber: await read("quote-last-number", 0),
+      creditNotes: await read("credit-notes-list", []),
+      lastCreditNoteNumber: await read("credit-note-last-number", 0),
     });
   }
 
@@ -416,7 +423,9 @@ if (!gotLock) {
       fileDir: String(config?.fileDir || ""),
       webhookEnabled: !!config?.webhookEnabled,
       webhookUrl: String(config?.webhookUrl || "").trim(),
-      ordersEnabled: !!config?.ordersEnabled,
+      // Bestellungen gehen nur über den Webhook. Ohne ihn ist der Haken in der
+      // App ausgeblendet — er darf das Ausschalten des Webhooks nicht blockieren.
+      ordersEnabled: !!config?.ordersEnabled && !!config?.webhookEnabled,
     };
     if (next.fileEnabled && !next.fileDir) return { ok: false, error: "Bitte einen Ordner für den Datei-Feed wählen." };
     if (next.webhookEnabled) {
@@ -540,6 +549,9 @@ if (!gotLock) {
       units: await read("serial-units", []),
       receipts: await read("receipts-list", []),
       movements,
+      // Ab 1.5.0: für Umsatz nach Gutschriften und die Excel-Auswertung.
+      creditNotes: await read("credit-notes-list", []),
+      quotes: await read("quotes-list", []),
     };
   }
 
@@ -805,6 +817,53 @@ if (!gotLock) {
     await startLocalApi();
   }
 
+  // ---- Updates (nur die portable .exe) ----
+  // Der portable Starter nennt den Pfad der .exe, die man gestartet hat — nicht
+  // den Temp-Ordner, in den er sich entpackt. Ohne ihn (npm start) wird nur
+  // geprüft, nicht installiert.
+  const UPDATE_CONFIG_META = "update-config";
+  const UPDATE_STATUS_META = "update-status";
+  const portableExe = process.env.PORTABLE_EXECUTABLE_FILE || null;
+  let updater = null;
+  let relaunchTarget = null;
+
+  function startUpdater() {
+    updater = createUpdater({
+      currentVersion: app.getVersion(),
+      exeFile: portableExe,
+      // Vorgabe: eingeschaltet — abschalten unter «Updates».
+      getEnabled: () => (store.getMeta(UPDATE_CONFIG_META) || {}).enabled !== false,
+      readStatus: () => store.getMeta(UPDATE_STATUS_META),
+      writeStatus: (s) => store.setMeta(UPDATE_STATUS_META, s),
+      // Vor dem Austausch noch eine Sicherung, falls eingerichtet.
+      beforeInstall: async () => {
+        if (autoBackup && !notReadyReason(readBackupConfig(), secrets.has(BACKUP_PASSWORD_SECRET))) {
+          await autoBackup.runBackup(KIND.hourly).catch(() => {});
+        }
+      },
+      launch: (target) => {
+        relaunchTarget = target;
+        setTimeout(() => app.quit(), 300);
+      },
+    });
+    if (portableExe) cleanupLeftovers(dirname(portableExe), [`${basename(portableExe)}.alt`]).catch(() => {});
+    const tick = () => updater.checkIfDue().catch(() => {});
+    setTimeout(tick, 20 * 1000);
+    setInterval(tick, 60 * 60 * 1000);
+  }
+
+  ipcMain.handle("updates:getState", async () => updater.state());
+  ipcMain.handle("updates:setEnabled", async (_event, enabled) => {
+    store.setMeta(UPDATE_CONFIG_META, { enabled: !!enabled });
+    return updater.state();
+  });
+  ipcMain.handle("updates:check", async () => updater.check());
+  ipcMain.handle("updates:install", async () => updater.install());
+  ipcMain.handle("updates:openPage", async () => {
+    const page = updater.state().latest?.pageUrl || RELEASES_PAGE;
+    openExternally(page.startsWith("https://github.com/") ? page : RELEASES_PAGE);
+  });
+
   app.whenReady().then(async () => {
     try {
       await openDatabase();
@@ -820,6 +879,7 @@ if (!gotLock) {
       app.quit();
       return;
     }
+    startUpdater();
     createWindow();
 
     app.on("activate", () => {
@@ -830,6 +890,18 @@ if (!gotLock) {
   app.on("will-quit", () => {
     if (localApi) localApi.stop();
     if (store) store.close();
+    // Nach einem Update die neue Version starten — erst jetzt, wenn die
+    // Datenbank zu ist. Die Sperre gegen eine zweite Instanz gibt die alte
+    // Version vorher frei, sonst würde sich die neue gleich wieder beenden.
+    if (relaunchTarget) {
+      app.releaseSingleInstanceLock();
+      const child = spawn(relaunchTarget, [], { detached: true, stdio: "ignore", cwd: dirname(relaunchTarget) });
+      // Startet die neue Version nicht (z. B. vom Virenschutz blockiert), soll
+      // das Beenden nicht mit einer Fehlermeldung enden — sie liegt bereit und
+      // startet beim nächsten Doppelklick.
+      child.on("error", (e) => console.error("Neue Version konnte nicht gestartet werden", e));
+      child.unref();
+    }
   });
 
   app.on("window-all-closed", () => {

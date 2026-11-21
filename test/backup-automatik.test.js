@@ -49,6 +49,16 @@ describe("Verschlüsselung", () => {
     expect(() => decryptBackup(JSON.stringify(envelope), PASSWORT)).toThrow(/beschädigte Datei/);
   });
 
+  it("rechnet nicht mit Schlüsselparametern aus einer präparierten Datei", () => {
+    const envelope = JSON.parse(encryptBackup("{}", PASSWORT));
+    // { N: 2 ** 20, r: 32 } bräuchte 4 GB Speicher.
+    const bad = [{ N: 2 ** 30 }, { N: 2 ** 20, r: 32 }, { N: 2 ** 17, r: 16, p: 99 }, { N: 3000 }, { N: 1 }, { r: 1e6 }, { p: 0 }, { N: "16384" }];
+    for (const kdf of bad) {
+      const file = JSON.stringify({ ...envelope, kdf: { ...envelope.kdf, ...kdf } });
+      expect(() => decryptBackup(file, PASSWORT)).toThrow("Die Datei ist keine gültige Qwui-Sicherung.");
+    }
+  });
+
   it("verlangt ein Passwort mit mindestens 8 Zeichen", () => {
     expect(checkBackupPassword("kurz")).toMatch(/mindestens 8/);
     expect(() => encryptBackup("{}", "kurz")).toThrow();

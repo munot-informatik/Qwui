@@ -9,7 +9,7 @@
 // Braucht ein D1-Datenbank-Binding namens "DB" im Cloudflare-Dashboard
 // (Pages-Projekt -> Settings -> Functions -> D1 database bindings).
 
-import { validateEntries, writeResponse } from "./storage-batch.js";
+import { validateEntries, writeResponse, requireJson } from "./storage-batch.js";
 
 function fullKey(key, shared) {
   return `${shared === "true" || shared === true ? "shared" : "personal"}:${key}`;
@@ -21,13 +21,10 @@ function fullKey(key, shared) {
 // sie Daten ablehnen, die heute funktionieren. Sie soll nur verhindern, dass
 // ein einzelner Request unbegrenzt viel in die Datenbank schiebt.
 //
-// ACHTUNG, wachsendes Problem unabhängig von dieser Grenze: jede Quittung
-// speichert in receipts-list ihre eigene Kopie von company — inklusive
-// logoDataUrl. Ein 300px-Logo sind rund 100 KB, macht ~100 KB PRO Quittung.
-// Ab ein paar Dutzend Quittungen läuft der Wert damit in das Limit von D1.
-// Die Desktop-Version umgeht das bereits (desktop/logoCache.js lagert Logos
-// in Dateien aus); die Web-Version braucht denselben Schritt.
-// Die Grenze selbst steht in storage-batch.js (validateEntries).
+// Logos der Quittungen lagert src/webLogoStore.js unter «logo:<hash>» aus,
+// grosse Werte zerlegt src/apiStorage.js in Teile — beides hält die einzelnen
+// Werte unter der Grenze von D1. Die Grenze hier steht in storage-batch.js
+// (validateEntries).
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -65,6 +62,8 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  const notJson = requireJson(request);
+  if (notJson) return notJson;
   let body;
   try {
     body = await request.json();

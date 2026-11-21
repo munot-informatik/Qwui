@@ -21,8 +21,10 @@ export function makeGoodsInDraft(input, ctx) {
   if (!article) throw new Error("Bitte den Artikel angeben (Artikelnummer oder Name).");
   const serials = Array.isArray(input?.serials) ? input.serials.map((s) => cleanText(s, 80)).filter(Boolean) : [];
   const quantity = input?.quantity == null || input.quantity === "" ? null : Number(input.quantity);
-  if (serials.length === 0 && !(Number.isFinite(quantity) && quantity > 0)) {
-    throw new Error("Bitte eine Menge grösser als 0 oder Seriennummern angeben.");
+  // Ganze Stück wie im Wareneingang der App — ein Vorschlag über 1.5 Stück
+  // liesse sich dort nie übernehmen.
+  if (serials.length === 0 && !(Number.isInteger(quantity) && quantity > 0)) {
+    throw new Error("Bitte eine ganze Menge grösser als 0 oder Seriennummern angeben.");
   }
   if (serials.length > 500) throw new Error("Zu viele Seriennummern in einem Vorschlag.");
   const purchasePrice = input?.purchasePrice == null || input.purchasePrice === "" ? null : Number(input.purchasePrice);

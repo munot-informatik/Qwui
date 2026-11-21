@@ -35,8 +35,10 @@ Online-Shop-Anbindung, Schnittstellen und lokalem Sprachmodell, liegt als PDF un
 19. [Automatische Sicherung (Windows)](#19-automatische-sicherung-windows)
 20. [Shop-Anbindung (Windows)](#20-shop-anbindung-windows)
 21. [Assistent (Claude Desktop)](#21-assistent-claude-desktop)
-22. [Tests](#22-tests)
-23. [Lizenz](#23-lizenz)
+22. [Offerten, Gutschriften und Lieferscheine](#22-offerten-gutschriften-und-lieferscheine)
+23. [Updates der Windows-Version](#23-updates-der-windows-version)
+24. [Tests](#24-tests)
+25. [Lizenz](#25-lizenz)
 
 ---
 
@@ -64,6 +66,10 @@ Online-Shop-Anbindung, Schnittstellen und lokalem Sprachmodell, liegt als PDF un
 - **Belege**: Alle Quittungen und Rechnungen an einem Ort — suchen (Nummer,
   Kunde, Artikel, Seriennummer), öffnen, bearbeiten, löschen, offene/bezahlte
   Beträge, Mahnung, Excel-Export.
+- **Offerten, Gutschriften, Lieferscheine**: Offerte mit Gültigkeit, die sich
+  mit einem Klick in eine Quittung übernehmen lässt; Gutschrift bei Retouren
+  mit Rücknahme ins Lager; Lieferschein ohne Preise zu jedem Beleg
+  (Abschnitt 22).
 - **Zentrale Datenbank**: Alle Daten liegen in Cloudflare D1 — jedes Gerät sieht nach
   dem Login denselben, aktuellen Stand. Sind zwei Geräte oder Fenster offen,
   kann keines die Änderungen des anderen überschreiben: Wer mit einem
@@ -79,8 +85,9 @@ Online-Shop-Anbindung, Schnittstellen und lokalem Sprachmodell, liegt als PDF un
 - **PWA**: Installierbar auf Desktop/Handy, mit Icon und Offline-Cache für die
   Oberfläche.
 - **Nur in der Windows-Version**: automatische, verschlüsselte Sicherung
-  (Abschnitt 19), Shop-Abgleich von Bestand und Preisen (Abschnitt 20) und ein
-  lokaler Zugang für den Assistenten Claude (Abschnitt 21).
+  (Abschnitt 19), Shop-Abgleich von Bestand und Preisen (Abschnitt 20), ein
+  lokaler Zugang für den Assistenten Claude (Abschnitt 21) und Updates mit
+  einem Klick (Abschnitt 23).
 
 ## 2. Voraussetzungen
 
@@ -134,12 +141,13 @@ shared/                          Reine Logik für App und Windows-Hauptprozess
   stock.js, serials.js           Lagerbuchungen, Exemplare, Seriennummern
   consent.js                     Einverständnis E-Mail-Beleg
   backupFormat.js                Aufbau der Backup-Datei
+  documents.js                   Offerte, Gutschrift, Lieferschein (Abschnitt 22)
   shopFeed.js                    Shop-Feed (ohne Seriennummern/Einkaufspreise)
   reports.js, drafts.js,         Auswertungen und Entwürfe für den Assistenten
   assistantTools.js
 desktop/                         Windows-Version (Electron), siehe Abschnitt 15
 mcp/                             MCP-Server für Claude Desktop, siehe Abschnitt 21
-test/                            vitest-Tests, siehe Abschnitt 22
+test/                            vitest-Tests, siehe Abschnitt 24
 public/                          Icons, PWA-Manifest, Service Worker
 functions/
   _middleware.js                 Passwortschutz + Rate-Limiting (läuft vor jedem Request)
@@ -757,7 +765,77 @@ fremdem Host-Namen (DNS-Rebinding) wird jede Anfrage abgewiesen. Das Token wie
 ein Passwort behandeln; **Erneuern** macht das alte sofort ungültig (danach den
 Eintrag in Claude Desktop anpassen).
 
-## 22. Tests
+## 22. Offerten, Gutschriften und Lieferscheine
+
+**Offerte.** In «Neue Quittung» oben die Belegart **Offerte** wählen. Kunde,
+Positionen und MWST wie bei der Quittung, dazu **Gültig bis** (Vorgabe 30
+Tage). Offerten haben eigene Nummern (`O-0001`) und buchen kein Lager.
+Unter **Offerten** stehen alle mit ihrem Stand (offen, abgelaufen,
+angenommen, abgelehnt). **Als Quittung übernehmen** füllt das
+Quittungsformular; Artikel mit Seriennummer stehen dort einzeln, das Exemplar
+wählt man beim Verkauf. Erst die Quittung bucht das Lager, die Offerte gilt
+dann als angenommen. Wird diese Quittung gelöscht, ist die Offerte wieder offen.
+
+**Gutschrift.** In der Vorschau einer Quittung oder Rechnung (oder unter
+Belege): **Gutschrift / Retoure**. Positionen und Menge wählen, je Produkt
+«zurück ins Lager» oder nicht (z. B. defekt, geht an den Lieferanten), dazu
+die Rückerstattung (bar, Überweisung, mit der Rechnung verrechnet).
+Gutschriften haben eigene Nummern (`G-0001`) und einen eigenen Beleg.
+
+- Mehr als verkauft lässt sich nie gutschreiben, auch nicht über mehrere
+  Gutschriften hinweg.
+- Zurückgenommene Ware erscheint im Protokoll als «Retoure». Exemplare mit
+  Seriennummer stehen danach «an Lager» oder auf «retourniert».
+- Eine Quittung mit Gutschrift lässt sich nicht mehr bearbeiten oder löschen.
+  Wird die Gutschrift gelöscht, bucht Qwui die Rücknahme zurück — ausser ein
+  Exemplar ist inzwischen weiterverkauft; dann bleibt die Gutschrift.
+- Unter **Belege** stehen Gutschriften als eigene Zeilen und werden vom Total
+  abgezogen, jede mit ihrem eigenen Datum. Bei einer offenen Rechnung zählt nur
+  noch der Rest; Mahnung und Einzahlungsschein verlangen genau diesen. Eine
+  Gutschrift zu einer offenen Rechnung mindert «davon offen», sonst «davon
+  bezahlt» — auch wenn sie in einem anderen Monat steht als die Rechnung.
+
+**Lieferschein.** In der Vorschau eines Belegs oben auf **Lieferschein**
+umschalten (oder unter Belege der Knopf «Lieferschein»). Er zeigt
+Lieferadresse, Menge, Artikel, Artikelnummer und Seriennummer — keine Preise,
+kein Einzahlungsschein — und ein Feld für die Empfangsbestätigung. Hat der
+Beleg Produkte, stehen nur diese darauf (keine Versandkosten oder Montage).
+Der Lieferschein trägt die Nummer des Belegs und wird nicht eigens gespeichert.
+
+Offerten und Gutschriften stecken in jeder Sicherung (Schema 3). Ältere
+Sicherungen haben sie nicht: Beim Import bleiben die vorhandenen Offerten
+stehen (eine angenommene, deren Quittung im importierten Stand fehlt, ist
+wieder offen), die Gutschriften werden entfernt — sie gehören zu den Quittungen und
+Exemplaren, die der Import ersetzt. Die Vorschau weist darauf hin.
+
+## 23. Updates der Windows-Version
+
+Unter **Einstellungen → Updates** sucht Qwui alle 6 Stunden bei GitHub nach
+einer neueren Version (abschaltbar). Dabei geht nur die Anfrage hinaus, keine
+Daten aus Qwui. Steht eine bereit, erscheint oben ein Hinweis.
+**Jetzt aktualisieren** lädt die neue `.exe`, prüft die SHA-256-Prüfsumme, die
+GitHub zur Datei angibt, sichert vorher noch einmal (falls die automatische
+Sicherung eingerichtet ist) und ersetzt die laufende Datei unter ihrem
+bisherigen Namen — Verknüpfungen und der Ordner `Qwui-Daten` bleiben, wie sie
+sind. Danach startet Qwui neu; die alte Datei (`….exe.alt`) räumt die neue
+Version beim nächsten Start weg.
+
+**Version veröffentlichen.** Damit die Updates greifen, braucht jede Version
+ein GitHub-Release mit dem Tag `v<Version>` und genau einer Datei
+`Qwui-<Version>.exe` (so heisst sie nach `npm run dist` ohnehin):
+
+```bash
+# Version in package.json und desktop/package.json erhöhen, dann:
+npm run build && (cd desktop && npm run dist)
+gh release create v1.5.0 desktop/release/Qwui-1.5.0.exe \
+  --title "Qwui Desktop v1.5.0 (Windows, portable)" --notes-file notizen.md
+```
+
+Die Prüfsumme berechnet GitHub selbst. Vorabversionen (`--prerelease`) bietet
+Qwui nicht an. Version 1.4.0 und älter kennen die Updates noch nicht: dort die
+neue Version einmal von Hand herunterladen.
+
+## 24. Tests
 
 ```bash
 npm install
@@ -774,7 +852,7 @@ Schnittstelle samt Token-Schutz und den MCP-Server über stdio. Abhängigkeiten
 aus `desktop/` und `mcp/` werden dafür gebraucht, deshalb die drei
 `npm install`.
 
-## 23. Lizenz
+## 25. Lizenz
 
 Copyright © 2026 Matthias Kubin, [Munot Informatik](https://munot-informatik.ch).
 

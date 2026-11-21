@@ -111,12 +111,18 @@ export function createOrderImport({
       // noch, obwohl sie hier schon entschieden ist (Meldung ging verloren),
       // wird die Entscheidung erneut gemeldet.
       const drafts = new Map(readDrafts().filter((d) => d.type === DRAFT_TYPE.order).map((d) => [d.payload.orderId, d]));
-      const queued = new Set((readQueue() || []).map((e) => e.orderId));
+      const queue = readQueue() || [];
+      const queued = new Set(queue.map((e) => e.orderId));
+      // Entschieden, aber noch nicht beim Shop angekommen. Der Vorschlag kann
+      // inzwischen weggefallen sein (es bleiben nur 200 erledigte) — ohne
+      // diese Prüfung entstünde ein zweiter Vorschlag für dieselbe Bestellung.
+      const decided = new Set(queue.filter((e) => e.status !== "abgeholt").map((e) => e.orderId));
       const created = [];
       const fetched = [];
       const skipped = [];
       for (const order of Array.isArray(data.orders) ? data.orders : []) {
         const draft = drafts.get(order?.id);
+        if (!draft && decided.has(order?.id)) continue;
         if (!draft) {
           // Eine fehlerhafte Bestellung darf die übrigen nicht aufhalten.
           let next;

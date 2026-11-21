@@ -6,6 +6,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Name, wie ihn storeLogo() vergibt: Inhalts-Hash plus Endung.
+const LOGO_REF = `${"a".repeat(64)}.png`;
 import { openStore } from "../desktop/sqliteStore.js";
 
 let dir;
@@ -93,8 +96,8 @@ describe("Logos in Quittungen", () => {
     const files = new Map();
     store = openStore(join(dir, "qwui.db"), {
       storeLogo: async (dataUrl) => {
-        files.set("abc.png", dataUrl);
-        return { logoRef: "abc.png", logoMime: "image/png" };
+        files.set(LOGO_REF, dataUrl);
+        return { logoRef: LOGO_REF, logoMime: "image/png" };
       },
       loadLogo: async (ref) => files.get(ref),
     });
@@ -109,7 +112,7 @@ describe("Logos in Quittungen", () => {
   it("liest für Auswertungen ohne Logos (getRaw)", async () => {
     let loads = 0;
     store = openStore(join(dir, "qwui.db"), {
-      storeLogo: async () => ({ logoRef: "abc.png", logoMime: "image/png" }),
+      storeLogo: async () => ({ logoRef: LOGO_REF, logoMime: "image/png" }),
       loadLogo: async () => {
         loads++;
         return "data:image/png;base64,AAAA";
@@ -117,7 +120,24 @@ describe("Logos in Quittungen", () => {
     });
     await store.set("receipts-list", JSON.stringify([{ id: "r1", company: { logoDataUrl: "data:image/png;base64,AAAA" } }]));
     const raw = JSON.parse(store.getRaw("receipts-list").value);
-    expect(raw[0].company).toEqual({ logoRef: "abc.png", logoMime: "image/png" });
+    expect(raw[0].company).toEqual({ logoRef: LOGO_REF, logoMime: "image/png" });
     expect(loads).toBe(0);
+  });
+
+  it("liest keine fremde Datei über einen untergeschobenen Logo-Namen", async () => {
+    const asked = [];
+    store = openStore(join(dir, "qwui.db"), {
+      storeLogo: async () => null,
+      loadLogo: async (ref) => {
+        asked.push(ref);
+        return "data:image/png;base64,AAAA";
+      },
+    });
+    // Z. B. aus einer präparierten Sicherung: Referenz ohne eingebettetes Logo.
+    const receipts = [{ id: "r1", company: { name: "A", logoRef: "..\\..\\geheim.bin", logoMime: "text/html" } }];
+    await store.set("receipts-list", JSON.stringify(receipts));
+    const read = JSON.parse((await store.get("receipts-list")).value);
+    expect(asked).toEqual([]);
+    expect(read[0].company).toEqual({ name: "A", logoDataUrl: "" });
   });
 });

@@ -15,6 +15,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFileSync } from "node:fs";
 
 const API_URL = (process.env.QWUI_API_URL || "http://127.0.0.1:47110").replace(/\/+$/, "");
 const API_TOKEN = process.env.QWUI_API_TOKEN || "";
@@ -50,7 +51,14 @@ function asToolResult(fn) {
   };
 }
 
-const server = new McpServer({ name: "qwui", version: "1.4.0" });
+// Im Bündel für Claude Desktop (desktop/scripts/build-mcp.js) setzt esbuild
+// die Version von Qwui ein; direkt gestartet gilt mcp/package.json.
+const VERSION =
+  typeof __QWUI_VERSION__ === "string"
+    ? __QWUI_VERSION__
+    : JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
+
+const server = new McpServer({ name: "qwui", version: VERSION });
 const readOnly = { readOnlyHint: true, openWorldHint: false };
 const draft = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
@@ -98,7 +106,7 @@ server.registerTool(
   {
     title: "Umsatz auswerten",
     description:
-      "Umsatz in einem Zeitraum (nach Quittungsdatum, Grenzen inklusive): Summe in CHF, Anzahl Quittungen, offene Rechnungen und die zehn umsatzstärksten Artikel. Optional nur eine Produktgruppe.",
+      "Umsatz in einem Zeitraum (nach Belegdatum, Grenzen inklusive): Summe in CHF nach Abzug der Gutschriften (total; vor Gutschriften: grossTotal), Anzahl Quittungen, offene Rechnungen und die zehn umsatzstärksten Artikel. Optional nur eine Produktgruppe.",
     inputSchema: {
       von: z.string().optional().describe("Startdatum JJJJ-MM-TT"),
       bis: z.string().optional().describe("Enddatum JJJJ-MM-TT"),
@@ -129,7 +137,7 @@ server.registerTool(
       "Legt einen ENTWURF für einen Wareneingang an. Gebucht wird erst, wenn jemand im Laden den Vorschlag in Qwui übernimmt — bitte das der Person so sagen. Bei seriennummernpflichtigen Artikeln die Seriennummern angeben, sonst die Menge.",
     inputSchema: {
       artikel: z.string().describe("Artikelnummer oder Artikelname"),
-      menge: z.number().positive().optional().describe("Menge (bei Artikeln ohne Seriennummer)"),
+      menge: z.number().int().positive().optional().describe("Menge in ganzen Stück (bei Artikeln ohne Seriennummer)"),
       seriennummern: z.array(z.string()).optional().describe("Seriennummern der Exemplare"),
       einkaufspreis: z.number().min(0).optional().describe("Einkaufspreis pro Stück in CHF"),
       bemerkung: z.string().optional().describe("z. B. Lieferschein-Nummer"),

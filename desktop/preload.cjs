@@ -50,6 +50,14 @@ contextBridge.exposeInMainWorld("qwuiDesktop", {
     chooseDir: () => ipcRenderer.invoke("shop:chooseDir"),
     syncNow: () => ipcRenderer.invoke("shop:syncNow"),
   },
+  // Updates von GitHub (nur die portable .exe installiert selbst).
+  updates: {
+    getState: () => ipcRenderer.invoke("updates:getState"),
+    setEnabled: (enabled) => ipcRenderer.invoke("updates:setEnabled", !!enabled),
+    check: () => ipcRenderer.invoke("updates:check"),
+    install: () => ipcRenderer.invoke("updates:install"),
+    openPage: () => ipcRenderer.invoke("updates:openPage"),
+  },
   ocr: {
     // Öffnet die Dateiauswahl und liest die gewählten Fotos. Der Pfad bleibt im
     // Hauptprozess, die Seite kann so keine beliebigen Dateien anfordern.

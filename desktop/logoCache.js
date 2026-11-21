@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
 import { getLogosDir } from "./dataDir.js";
+import { isStoredLogoRef, logoMimeOf } from "./sqliteStore.js";
 
 function parseDataUrl(dataUrl) {
   const match = /^data:([^;]+);base64,([\s\S]*)$/.exec(dataUrl || "");
@@ -41,9 +42,11 @@ export async function storeLogo(logoDataUrl) {
 // der Auslagerung.
 export async function loadLogo(logoRef, logoMime) {
   if (!logoRef) return "";
+  // Nur eigene Dateien im Logo-Ordner — nie einen Pfad aus den Daten.
+  if (!isStoredLogoRef(logoRef)) return "";
   try {
     const bytes = await readFile(join(getLogosDir(), logoRef));
-    const mime = logoMime || "image/png";
+    const mime = logoMimeOf(logoMime);
     return `data:${mime};base64,${bytes.toString("base64")}`;
   } catch (e) {
     console.error(`Logo ${logoRef} konnte nicht geladen werden`, e);

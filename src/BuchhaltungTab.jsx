@@ -3,9 +3,10 @@
 // suchen, öffnen, bearbeiten, löschen, Zahlungen verbuchen, Mahnung, Excel.
 
 import React, { useMemo, useState } from "react";
-import { Download, Check, Loader2, AlertTriangle, Bell, Search, X, Trash2, Lock } from "lucide-react";
+import { Download, Check, Loader2, AlertTriangle, Bell, Search, X, Trash2, Lock, Truck, Undo2 } from "lucide-react";
 import { buildMahnungPdfBytes } from "./receiptPdf.js";
 import { filterReceipts } from "../shared/search.js";
+import { creditNotesFor, creditTotalFor, creditableLines, openAmount, refundLabel, periodTotals } from "../shared/documents.js";
 import { costTotals, sumCosts, costSummaryText } from "../shared/internalCosts.js";
 
 function chf(n) {
@@ -55,9 +56,10 @@ function statusLabel(status) {
 }
 
 // Offene QR-Rechnung, deren individuelle Zahlungsfrist ab Rechnungsdatum
-// (siehe Hinweistext auf der Rechnung) bereits abgelaufen ist.
-function isOverdue(receipt) {
-  return statusOf(receipt) === "offen" && daysSince(receipt.date) > paymentTermOf(receipt);
+// (siehe Hinweistext auf der Rechnung) bereits abgelaufen ist. Ganz durch
+// Gutschriften ausgeglichen, ist nichts mehr fällig.
+function isOverdue(receipt, creditNotes = []) {
+  return statusOf(receipt) === "offen" && openAmount(receipt, creditNotes) > 0 && daysSince(receipt.date) > paymentTermOf(receipt);
 }
 
 // Tage über die Zahlungsfrist hinaus (>= 1, wenn überfällig).
@@ -65,7 +67,17 @@ function daysOverdue(receipt) {
   return daysSince(receipt.date) - paymentTermOf(receipt);
 }
 
-export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit, onDelete }) {
+export default function BuchhaltungTab({
+  receipts,
+  creditNotes = [],
+  onTogglePaid,
+  onOpen,
+  onEdit,
+  onDelete,
+  onCredit,
+  onDeliveryNote,
+  onDeleteCreditNote,
+}) {
   const now = new Date();
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth()); // 0-11, or "all"
@@ -89,12 +101,30 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
     [receipts, selectedYear, selectedMonth, query]
   );
 
-  const total = filtered.reduce((sum, r) => sum + (Number(r.total) || 0), 0);
-  const totalOpen = filtered
-    .filter((r) => statusOf(r) === "offen")
-    .reduce((sum, r) => sum + (Number(r.total) || 0), 0);
-  const totalPaid = total - totalOpen;
-  const overdueCount = filtered.filter(isOverdue).length;
+  // Gutschriften zählen in ihrem eigenen Zeitraum (Datum der Gutschrift).
+  const filteredCredits = useMemo(
+    () => filterReceipts(creditNotes, { year: selectedYear, month: selectedMonth, query }),
+    [creditNotes, selectedYear, selectedMonth, query]
+  );
+  // Eine Liste, neueste zuerst: Quittungen und Gutschriften gemischt.
+  const rows = useMemo(
+    () =>
+      [...filtered.map((doc) => ({ kind: "beleg", doc })), ...filteredCredits.map((doc) => ({ kind: "gutschrift", doc }))].sort(
+        (a, b) => (a.doc.date !== b.doc.date ? (a.doc.date < b.doc.date ? 1 : -1) : String(b.doc.createdAt || "").localeCompare(String(a.doc.createdAt || "")))
+      ),
+    [filtered, filteredCredits]
+  );
+
+  // Offen + bezahlt = Total, auch wenn Rechnung und Gutschrift in
+  // verschiedenen Monaten liegen (siehe periodTotals).
+  const {
+    receipts: totalReceipts,
+    credits: totalCredits,
+    total,
+    open: totalOpen,
+    paid: totalPaid,
+  } = periodTotals(filtered, filteredCredits, receipts);
+  const overdueCount = filtered.filter((r) => isOverdue(r, creditNotes)).length;
   // Interner Aufwand (Kilometer, Material) im Zeitraum — nur hier, nie beim Kunden.
   const costs = sumCosts(filtered);
 
@@ -123,7 +153,21 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
         "Material (Beschreibung)": (r.internalCosts?.materials || []).map((m) => `${m.description} ${Number(m.amount || 0).toFixed(2)}`).join("; "),
       }));
 
+      for (const c of filteredCredits) {
+        rows.push({
+          "Nr.": c.number,
+          Datum: formatDateDE(c.date),
+          Kunde: c.customer?.name || "",
+          "Betrag (CHF)": -(Number(c.total) || 0),
+          "MWST enthalten": c.vatEnabled ? "Ja" : "Nein",
+          Status: `Gutschrift zu Nr. ${c.receiptNumber} (${refundLabel(c)})`,
+        });
+      }
       rows.push({});
+      if (totalCredits > 0) {
+        rows.push({ "Nr.": "", Datum: "", Kunde: "Belege", "Betrag (CHF)": totalReceipts, "MWST enthalten": "", Status: "" });
+        rows.push({ "Nr.": "", Datum: "", Kunde: "Gutschriften", "Betrag (CHF)": -totalCredits, "MWST enthalten": "", Status: "" });
+      }
       rows.push({ "Nr.": "", Datum: "", Kunde: "Total", "Betrag (CHF)": total, "MWST enthalten": "", Status: "" });
       rows.push({ "Nr.": "", Datum: "", Kunde: "davon bezahlt", "Betrag (CHF)": totalPaid, "MWST enthalten": "", Status: "" });
       rows.push({ "Nr.": "", Datum: "", Kunde: "davon offen", "Betrag (CHF)": totalOpen, "MWST enthalten": "", Status: "" });
@@ -153,7 +197,14 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
   async function createMahnung(receipt) {
     setMahnungId(receipt.id);
     try {
-      const pdfBytes = await buildMahnungPdfBytes(receipt);
+      // Nach einer Gutschrift ist nur noch der Rest offen — Mahnung und
+      // Einzahlungsschein verlangen genau diesen.
+      const credited = creditTotalFor(creditNotes, receipt.id);
+      const pdfBytes = await buildMahnungPdfBytes(
+        credited > 0
+          ? { ...receipt, total: openAmount(receipt, creditNotes), originalTotal: receipt.total, creditedTotal: credited, creditNoteNumbers: creditNotesFor(creditNotes, receipt.id).map((c) => c.number) }
+          : receipt
+      );
       const blob = new Blob([pdfBytes], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -214,7 +265,7 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
           ))}
         </select>
 
-        <button onClick={exportToExcel} style={styles.exportBtn} disabled={filtered.length === 0 || exporting}>
+        <button onClick={exportToExcel} style={styles.exportBtn} disabled={rows.length === 0 || exporting}>
           {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
           {exporting ? "Exportiere…" : "Export zu Excel"}
         </button>
@@ -224,6 +275,7 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
         <span style={styles.legendItem}><span style={{ ...styles.dot, background: "#B00020" }} /> Offene Rechnung</span>
         <span style={styles.legendItem}><span style={{ ...styles.dot, background: "#1D7A3C" }} /> Bezahlt / Direktzahlung</span>
         <span style={styles.legendItem}><AlertTriangle size={12} color="#B5480C" /> Überfällig (Zahlungsfrist abgelaufen)</span>
+        <span style={styles.legendItem}><span style={{ ...styles.dot, background: "#5B6B85" }} /> Gutschrift</span>
       </div>
 
       {overdueCount > 0 && (
@@ -234,15 +286,67 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
         </div>
       )}
 
-      {filtered.length === 0 ? (
+      {rows.length === 0 ? (
         <div style={styles.empty}>
           {receipts.length === 0 ? "Noch keine Quittungen erstellt." : searching ? "Kein Beleg gefunden." : `Keine Belege für ${periodLabel()}.`}
         </div>
       ) : (
         <div style={styles.table}>
-          {filtered.map((r) => {
+          {rows.map(({ kind, doc: r }) => {
+            if (kind === "gutschrift") {
+              return (
+                <div key={r.id} style={{ ...styles.row, background: "#EEF1F6" }}>
+                  <div style={styles.rowMain}>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>
+                        Gutschrift <span className="mono">{r.number}</span> · {r.customer?.name}
+                      </div>
+                      <div style={styles.muted}>
+                        {formatDateDE(r.date)} · zu {r.receiptWord} Nr. <span className="mono">{r.receiptNumber}</span> · {refundLabel(r)}
+                        {r.emailDelivery ? ` · E-Mail ${r.emailDelivery.status}` : ""}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div className="mono" style={{ fontWeight: 700 }}>− CHF {chf(r.total)}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "#3D4A60" }}>Gutschrift</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    {onOpen && (
+                      <button onClick={() => onOpen(r)} style={styles.actionBtn}>
+                        Öffnen
+                      </button>
+                    )}
+                    {onDeleteCreditNote &&
+                      (confirmDelete === r.id ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setConfirmDelete(null);
+                              onDeleteCreditNote(r.id);
+                            }}
+                            style={styles.dangerBtn}
+                          >
+                            Ja, löschen
+                          </button>
+                          <button onClick={() => setConfirmDelete(null)} style={styles.actionBtn}>
+                            Nein
+                          </button>
+                        </>
+                      ) : (
+                        <button onClick={() => setConfirmDelete(r.id)} style={styles.actionBtn} aria-label={`Gutschrift ${r.number} löschen`}>
+                          <Trash2 size={12} /> Löschen
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              );
+            }
             const status = statusOf(r);
-            const overdue = isOverdue(r);
+            const overdue = isOverdue(r, creditNotes);
+            const credits = creditNotesFor(creditNotes, r.id);
+            const creditable = creditableLines(r, creditNotes).some((l) => l.remaining > 0);
+            const rest = status === "offen" && credits.length ? openAmount(r, creditNotes) : null;
             const rowColor = status === "offen" ? "#FDEBEC" : "#EAF6EE";
             const textColor = status === "offen" ? "#8A1620" : "#155C2C";
             return (
@@ -265,6 +369,12 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
                       {r.editedAt ? " · bearbeitet" : ""}
                       {r.emailDelivery ? ` · E-Mail ${r.emailDelivery.status}${r.emailDelivery.beforeEdit ? " (frühere Fassung)" : ""}` : ""}
                     </div>
+                    {credits.length > 0 && (
+                      <div style={styles.creditLine}>
+                        <Undo2 size={11} /> Gutschrift {credits.map((c) => c.number).join(", ")}: − CHF {chf(creditTotalFor(creditNotes, r.id))}
+                        {rest !== null ? ` · offen noch CHF ${chf(rest)}` : ""}
+                      </div>
+                    )}
                     {costSummaryText(r) && (
                       <div style={styles.costLine} title="Interner Aufwand — steht nicht auf dem Beleg">
                         <Lock size={11} /> Aufwand: {costSummaryText(r)}
@@ -290,12 +400,22 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
                       Öffnen
                     </button>
                   )}
-                  {onEdit && (
+                  {onEdit && credits.length === 0 && (
                     <button onClick={() => onEdit(r)} style={styles.actionBtn}>
                       Bearbeiten
                     </button>
                   )}
-                  {onDelete &&
+                  {onDeliveryNote && (
+                    <button onClick={() => onDeliveryNote(r)} style={styles.actionBtn}>
+                      <Truck size={12} /> Lieferschein
+                    </button>
+                  )}
+                  {onCredit && creditable && (
+                    <button onClick={() => onCredit(r)} style={styles.actionBtn}>
+                      <Undo2 size={12} /> Gutschrift
+                    </button>
+                  )}
+                  {onDelete && credits.length === 0 &&
                     (confirmDelete === r.id ? (
                       <>
                         <button
@@ -347,8 +467,20 @@ export default function BuchhaltungTab({ receipts, onTogglePaid, onOpen, onEdit,
         </div>
       )}
 
-      {filtered.length > 0 && (
+      {rows.length > 0 && (
         <div style={styles.totalsBox}>
+          {totalCredits > 0 && (
+            <>
+              <div style={styles.totalRow}>
+                <span>Belege</span>
+                <span className="mono">CHF {chf(totalReceipts)}</span>
+              </div>
+              <div style={styles.totalRow}>
+                <span>Gutschriften</span>
+                <span className="mono">− CHF {chf(totalCredits)}</span>
+              </div>
+            </>
+          )}
           <div style={styles.totalRow}>
             <span>davon offen</span>
             <span className="mono" style={{ color: "#B00020" }}>CHF {chf(totalOpen)}</span>
@@ -400,6 +532,7 @@ const styles = {
   h1: { fontSize: 22, fontWeight: 700, margin: "0 0 20px 0" },
   filterRow: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
   costLine: { display: "flex", alignItems: "center", gap: 4, marginTop: 3, fontSize: 11, color: "#5B5F66" },
+  creditLine: { display: "flex", alignItems: "center", gap: 4, marginTop: 3, fontSize: 11, color: "#3D4A60" },
   costBox: { marginTop: 14, paddingTop: 8, borderTop: "1px dashed #CBCED2", color: "#5B5F66" },
   searchRow: { display: "flex", alignItems: "center", gap: 8, border: "1px solid #DADDE1", background: "#fff", padding: "0 10px", marginBottom: 10 },
   iconBtn: { border: "none", background: "transparent", cursor: "pointer", padding: 6, display: "flex" },

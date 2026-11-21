@@ -17,6 +17,16 @@ import {
   receiptListTotal,
   receiptDiscountTotal,
 } from "../shared/items.js";
+import {
+  docWord,
+  docNumberLine,
+  docMetaLines,
+  recipientLabel,
+  itemsLabel,
+  totalLabel,
+  docClosing,
+  isDeliveryNote,
+} from "../shared/documents.js";
 
 const MM = 2.834645669; // 1mm in PDF-Punkten
 const mm = (v) => v * MM;
@@ -376,23 +386,30 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
 
   const rightX = PAGE_W - MARGIN;
   // Mit aktivierter QR-Rechnung ist die Quittung noch nicht bezahlt und
-  // fungiert als Rechnung — Titel entsprechend anpassen.
-  const titleStr = receipt.qrBillEnabled ? "RECHNUNG" : "QUITTUNG";
+  // fungiert als Rechnung — Titel entsprechend anpassen. Offerte, Gutschrift
+  // und Lieferschein: siehe shared/documents.js.
+  const titleStr = docWord(receipt).toUpperCase();
   const titleWidth = fontBold.widthOfTextAtSize(titleStr, 17);
   text(titleStr, rightX - titleWidth, y - 2, { size: 17, f: fontBold, color: COLOR.red });
-  const nrStr = `Nr. ${receipt.number}`;
-  const nrWidth = fontBold.widthOfTextAtSize(nrStr, 10);
+  const nrStr = docNumberLine(receipt);
+  const nrWidth = fontBold.widthOfTextAtSize(toWinAnsiSafe(nrStr), 10);
   text(nrStr, rightX - nrWidth, y - 20, { size: 10, f: fontBold });
   const dateStr = formatDateDE(receipt.date);
   const dateWidth = font.widthOfTextAtSize(dateStr, 8.5);
   text(dateStr, rightX - dateWidth, y - 32, { size: 8.5, color: COLOR.gray });
+  let metaY = y - 32;
+  docMetaLines(receipt).forEach((l) => {
+    metaY -= 11;
+    const w = font.widthOfTextAtSize(toWinAnsiSafe(l), 8.5);
+    text(l, rightX - w, metaY, { size: 8.5, color: COLOR.gray });
+  });
 
-  y = Math.min(leftY, y - 44) - 14;
+  y = Math.min(leftY, metaY - 12) - 14;
   line(MARGIN, y, PAGE_W - MARGIN, COLOR.ink, 1.5);
   y -= 26;
 
   // ---- Empfänger ----
-  text("EMPFÄNGER", MARGIN, y, { size: 7.5, f: fontBold, color: COLOR.lightGray });
+  text(recipientLabel(receipt).toUpperCase(), MARGIN, y, { size: 7.5, f: fontBold, color: COLOR.lightGray });
   y -= 14;
   text(receipt.customer?.name || "", MARGIN, y, { size: 11, f: fontBold });
   y -= 14;
@@ -405,10 +422,19 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
     text(l, MARGIN, y, { size: 8.5, color: COLOR.gray });
     y -= 11;
   });
+  if (isDeliveryNote(receipt) && receipt.customer?.phone) {
+    text(receipt.customer.phone, MARGIN, y, { size: 8.5, color: COLOR.gray });
+    y -= 11;
+  }
   y -= 12;
 
+  // ---- Lieferschein: Menge, Artikel, Seriennummer — ohne Preise ----
+  if (isDeliveryNote(receipt)) {
+    return finishDeliveryNote(pdfDoc, page, receipt, { font, fontBold, fontOblique, y });
+  }
+
   // ---- Leistung ----
-  text("LEISTUNG", MARGIN, y, { size: 7.5, f: fontBold, color: COLOR.lightGray });
+  text(itemsLabel(receipt).toUpperCase(), MARGIN, y, { size: 7.5, f: fontBold, color: COLOR.lightGray });
   y -= 16;
 
   const ITEM_SAFE_BOTTOM = MARGIN + mm(35); // Reserve für Total + Schlusszeile
@@ -553,7 +579,7 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
   y -= 2;
   line(MARGIN, y, PAGE_W - MARGIN, COLOR.ink, 1.5);
   y -= 16;
-  text(receipt.vatEnabled ? "Total (inkl. MWST)" : "Total", MARGIN, y, { size: 10.5, f: fontBold });
+  text(totalLabel(receipt), MARGIN, y, { size: 10.5, f: fontBold });
   const totalStr = `CHF ${chf(receipt.total)}`;
   const totalWidth = fontBold.widthOfTextAtSize(totalStr, 10.5);
   text(totalStr, PAGE_W - MARGIN - totalWidth, y, { size: 10.5, f: fontBold, color: COLOR.red });
@@ -569,18 +595,25 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
   }
 
   const term = paymentTermOf(receipt);
-  const closingText = receipt.qrBillEnabled
-    ? `Zahlbar per beiliegendem Einzahlungsschein innert ${term} ${dayWord(term)}.`
-    : `Betrag dankend erhalten, ${company.zipCity || "___________"}, ${formatDateDE(receipt.date)}`;
-  text(closingText, MARGIN, y, { size: 9 });
+  const closing = docClosing(receipt, company);
+  const closingText = closing
+    ? closing.text
+    : receipt.qrBillEnabled
+      ? `Zahlbar per beiliegendem Einzahlungsschein innert ${term} ${dayWord(term)}.`
+      : `Betrag dankend erhalten, ${company.zipCity || "___________"}, ${formatDateDE(receipt.date)}`;
+  wrapText(closingText, font, 9, PAGE_W - 2 * MARGIN).forEach((l, i) => {
+    if (i) y -= 11;
+    text(l, MARGIN, y, { size: 9 });
+  });
   y -= 20;
   line(MARGIN, y, PAGE_W - MARGIN, COLOR.line, 0.75);
   y -= 12;
-  text("Unterschrift", MARGIN, y, { size: 8.5, color: COLOR.gray });
+  text(closing ? closing.signatureLabel : "Unterschrift", MARGIN, y, { size: 8.5, color: COLOR.gray });
   // Breite auf dem bereinigten Text messen, sonst stimmt die Rechtsbündigkeit
   // nicht, wenn toWinAnsiSafe() Zeichen ersetzt hat (z.B. "Đ" -> "Dj").
-  const sigWidth = fontOblique.widthOfTextAtSize(toWinAnsiSafe(company.name), 9.5);
-  text(company.name || "", PAGE_W - MARGIN - sigWidth, y, { size: 9.5, f: fontOblique });
+  const signer = closing ? closing.signer : company.name || "";
+  const sigWidth = fontOblique.widthOfTextAtSize(toWinAnsiSafe(signer), 9.5);
+  text(signer, PAGE_W - MARGIN - sigWidth, y, { size: 9.5, f: fontOblique });
   y -= 20;
 
   // ---- QR-Rechnung: garantiert am unteren Rand, auf Seite 1 falls Platz
@@ -603,6 +636,87 @@ export async function generateReceiptPdf(receipt, qrPngBytes) {
     await drawQrSlip(pdfDoc, page, receipt, qrPngBytes, { font, fontBold });
   }
 
+  return pdfDoc.save();
+}
+
+// Rest eines Lieferscheins ab der Warenliste: Menge, Artikel, Artikelnummer
+// und Seriennummer, dann Bemerkung, Empfangsbestätigung und Fusszeile. Keine
+// Preise und kein Einzahlungsschein.
+async function finishDeliveryNote(pdfDoc, firstPage, receipt, { font, fontBold, fontOblique, y: startY }) {
+  let page = firstPage;
+  let y = startY;
+  const company = receipt.company || {};
+  const text = (str, x, yPos, { size = 9, f = font, color = COLOR.ink } = {}) =>
+    page.drawText(toWinAnsiSafe(str), { x, y: yPos, size, font: f, color });
+  const line = (x1, yPos, x2, color = COLOR.line, width = 1) =>
+    page.drawLine({ start: { x: x1, y: yPos }, end: { x: x2, y: yPos }, thickness: width, color });
+
+  const COL_QTY_RIGHT = MARGIN + mm(12);
+  const COL_DESC = MARGIN + mm(16);
+  const COL_ART = PAGE_W - MARGIN - mm(70);
+  const COL_SERIAL = PAGE_W - MARGIN - mm(36);
+  function header(label) {
+    text(label, MARGIN, y, { size: 7.5, f: fontBold, color: COLOR.lightGray });
+    y -= 14;
+    [["MENGE", null], ["ARTIKEL", COL_DESC], ["ART.-NR.", COL_ART], ["SERIENNUMMER", COL_SERIAL]].forEach(([h, x]) => {
+      if (x === null) {
+        const w = fontBold.widthOfTextAtSize(h, 7);
+        text(h, COL_QTY_RIGHT - w, y, { size: 7, f: fontBold, color: COLOR.gray });
+      } else {
+        text(h, x, y, { size: 7, f: fontBold, color: COLOR.gray });
+      }
+    });
+    y -= 6;
+    line(MARGIN, y, PAGE_W - MARGIN, COLOR.line, 0.75);
+    y -= 12;
+  }
+  header(itemsLabel(receipt).toUpperCase());
+
+  for (const it of receipt.items || []) {
+    if (y < MARGIN + mm(30)) {
+      page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+      y = PAGE_H - MARGIN;
+      header(`${itemsLabel(receipt).toUpperCase()} (Fortsetzung)`);
+    }
+    const qty = formatPercent(itemQuantity(it));
+    text(qty, COL_QTY_RIGHT - font.widthOfTextAtSize(qty, 9.5), y, { size: 9.5 });
+    const descLines = wrapText(it.description || "", font, 9.5, COL_ART - COL_DESC - mm(3));
+    text(descLines[0] || "", COL_DESC, y, { size: 9.5 });
+    if (itemKind(it) === "product" && it.articleNumber) text(it.articleNumber, COL_ART, y, { size: 8.5, color: COLOR.gray });
+    if (it.serial) text(it.serial, COL_SERIAL, y, { size: 8.5, color: COLOR.gray });
+    y -= 11;
+    descLines.slice(1).forEach((l) => {
+      text(l, COL_DESC, y, { size: 9.5 });
+      y -= 11;
+    });
+    y -= 2;
+    line(MARGIN, y, PAGE_W - MARGIN, COLOR.line, 0.5);
+    y -= 12;
+  }
+  y -= 10;
+
+  const footerH = footerBlockHeight(company);
+  if (y < MARGIN + footerH + mm(40)) {
+    page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+    y = PAGE_H - MARGIN;
+  }
+  if (receipt.note) {
+    wrapText(receipt.note, font, 9, PAGE_W - 2 * MARGIN).forEach((l) => {
+      text(l, MARGIN, y, { size: 9 });
+      y -= 11;
+    });
+    y -= 8;
+  }
+  const closing = docClosing(receipt, company);
+  text(closing.text, MARGIN, y, { size: 9 });
+  y -= 34;
+  line(MARGIN, y, PAGE_W - MARGIN, COLOR.line, 0.75);
+  y -= 12;
+  text(closing.signatureLabel, MARGIN, y, { size: 8.5, color: COLOR.gray });
+  const sigWidth = fontOblique.widthOfTextAtSize(toWinAnsiSafe(company.name || ""), 9.5);
+  text(company.name || "", PAGE_W - MARGIN - sigWidth, y, { size: 9.5, f: fontOblique });
+
+  drawFooter(page, company, { font, fontBold }, MARGIN);
   return pdfDoc.save();
 }
 
@@ -698,14 +812,24 @@ export async function generateMahnungPdf(receipt, qrPngBytes) {
   // ---- Zusammenfassung ----
   line(MARGIN, y, PAGE_W - MARGIN, COLOR.ink, 1.5);
   y -= 18;
+  // Nach einer Gutschrift: Rechnungsbetrag, Gutschrift und der Rest, den
+  // Mahnung und Einzahlungsschein verlangen (receipt.total ist dann der Rest).
+  const creditRows =
+    receipt.creditedTotal > 0
+      ? [
+          ["Rechnungsbetrag", `CHF ${chf(receipt.originalTotal)}`],
+          [`Gutschrift ${(receipt.creditNoteNumbers || []).join(", ")}`.trim(), `− CHF ${chf(receipt.creditedTotal)}`],
+          ["Offener Betrag", `CHF ${chf(receipt.total)}`],
+        ]
+      : [["Betrag", `CHF ${chf(receipt.total)}`]];
   [
     ["Rechnung Nr.", receipt.number],
     ["Rechnungsdatum", formatDateDE(receipt.date)],
     ["Fällig seit", formatDateDE(dueDate)],
-    ["Betrag", `CHF ${chf(receipt.total)}`],
+    ...creditRows,
   ].forEach(([label, value]) => {
     text(label, MARGIN, y, { size: 9.5, color: COLOR.gray });
-    const valueWidth = fontBold.widthOfTextAtSize(value, 10);
+    const valueWidth = fontBold.widthOfTextAtSize(toWinAnsiSafe(value), 10);
     text(value, PAGE_W - MARGIN - valueWidth, y, { size: 10, f: fontBold });
     y -= 16;
   });
@@ -785,15 +909,22 @@ async function drawQrSlip(pdfDoc, page, receipt, qrPngBytes, { font, fontBold })
   ry -= 8;
   t(referenceDisplay, pad, ry, { size: 8 });
   ry -= 15;
-  label("Zahlbar durch", pad, ry);
+  // Zahlbar durch: genau das, was auch im QR-Code steht. Ohne vollständige
+  // Adresse ist dort kein Schuldner — dann ein leeres Feld mit Eckmarken zum
+  // Ausfüllen von Hand (Vorgabe der Swiss Implementation Guidelines).
+  const withDebtor = hasQrDebtor(receipt.customer);
+  label(withDebtor ? "Zahlbar durch" : "Zahlbar durch (Name/Adresse)", pad, ry);
   ry -= 8;
-  if (receipt.customer?.name) {
+  if (withDebtor) {
     t(receipt.customer.name, pad, ry, { size: 8 });
     ry -= 9.5;
     debtorLines.forEach((l) => {
       t(l, pad, ry, { size: 8 });
       ry -= 9.5;
     });
+  } else {
+    drawCornerBox(page, pad, ry + 6, mm(52), mm(20));
+    ry -= mm(20);
   }
 
   const contentBottomLeft = ry - mm(4);
@@ -841,15 +972,39 @@ async function drawQrSlip(pdfDoc, page, receipt, qrPngBytes, { font, fontBold })
   py -= 8;
   t(`Rechnung Nr. ${receipt.number}`, PAY_RIGHT_X, py, { size: 8 });
   py -= 15;
-  label("Zahlbar durch", PAY_RIGHT_X, py);
+  label(withDebtor ? "Zahlbar durch" : "Zahlbar durch (Name/Adresse)", PAY_RIGHT_X, py);
   py -= 8;
-  if (receipt.customer?.name) {
+  if (withDebtor) {
     t(receipt.customer.name, PAY_RIGHT_X, py, { size: 8 });
     py -= 9.5;
     debtorLines.forEach((l) => {
       t(l, PAY_RIGHT_X, py, { size: 8 });
       py -= 9.5;
     });
+  } else {
+    drawCornerBox(page, PAY_RIGHT_X, py + 6, mm(65), mm(25));
+  }
+}
+
+// Wie in receiptPdf.js: Ein Schuldner kommt nur mit Name, PLZ und Ort in den
+// QR-Code — der Zahlteil zeigt dieselbe Angabe.
+export function hasQrDebtor(customer) {
+  return !!(customer?.name && customer.postalCode && customer.city);
+}
+
+// Leeres Feld mit Eckmarken (3 mm), oben links bei (x, yTop).
+function drawCornerBox(page, x, yTop, w, h) {
+  const len = mm(3);
+  const opts = { thickness: 0.75, color: COLOR.black };
+  const corners = [
+    [x, yTop, 1, -1],
+    [x + w, yTop, -1, -1],
+    [x, yTop - h, 1, 1],
+    [x + w, yTop - h, -1, 1],
+  ];
+  for (const [cx, cy, dx, dy] of corners) {
+    page.drawLine({ start: { x: cx, y: cy }, end: { x: cx + dx * len, y: cy }, ...opts });
+    page.drawLine({ start: { x: cx, y: cy }, end: { x: cx, y: cy + dy * len }, ...opts });
   }
 }
 

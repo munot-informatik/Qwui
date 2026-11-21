@@ -6,8 +6,13 @@
 // Version 2 (ab 1.2.0): dazu Exemplare (serialUnits), Lagerbewegungen
 // (stockMovements, nach Jahres-Schlüssel) und — nur aus der Windows-Version —
 // Einstellungen ohne Geheimnisse (settings). Passwörter sind nie enthalten.
+// Version 3 (ab 1.5.0): dazu Offerten (quotes) und Gutschriften (creditNotes)
+// mit ihren Nummernfolgen. Ältere Sicherungen haben sie nicht — beim Import
+// bleiben die vorhandenen Offerten stehen (angenommene ohne ihre Quittung
+// wieder offen); die Gutschriften werden entfernt,
+// weil sie zu den ersetzten Quittungen und Exemplaren gehören.
 
-export const BACKUP_SCHEMA_VERSION = 2;
+export const BACKUP_SCHEMA_VERSION = 3;
 
 export function buildBackupPayload({
   company,
@@ -18,6 +23,10 @@ export function buildBackupPayload({
   movementsByKey,
   settings,
   lastReceiptNumber,
+  quotes,
+  lastQuoteNumber,
+  creditNotes,
+  lastCreditNoteNumber,
   now = new Date().toISOString(),
 }) {
   const payload = {
@@ -29,9 +38,13 @@ export function buildBackupPayload({
     inventory: inventory || [],
     serialUnits: units || [],
     stockMovements: movementsByKey || {},
+    quotes: quotes || [],
+    creditNotes: creditNotes || [],
   };
   if (settings) payload.settings = settings;
   if (lastReceiptNumber) payload.lastReceiptNumber = lastReceiptNumber;
+  if (lastQuoteNumber) payload.lastQuoteNumber = lastQuoteNumber;
+  if (lastCreditNoteNumber) payload.lastCreditNoteNumber = lastCreditNoteNumber;
   return payload;
 }
 

@@ -93,34 +93,40 @@ export function serialReport(units, inventory, serial) {
 
 // umsatz_auswerten: Summen, Anzahl und Top-Artikel in einem Zeitraum
 // (Quittungsdatum, beide Grenzen inklusive). Mit Produktgruppe zählen nur
-// Produktpositionen dieser Gruppe.
-export function salesReport(receipts, inventory, { from, to, group = "" } = {}) {
+// Produktpositionen dieser Gruppe. Gutschriften (ab 1.5.0) zählen mit ihrem
+// eigenen Datum und werden abgezogen: total ist der Umsatz nach Gutschriften.
+export function salesReport(receipts, inventory, { from, to, group = "" } = {}, creditNotes = []) {
   const wantedGroup = String(group).trim().toLowerCase();
   const byId = new Map((inventory || []).map((p) => [p.id, p]));
-  const groupOf = (it) => {
-    const p = it.productId ? byId.get(it.productId) : (inventory || []).find((x) => x.articleNumber && x.articleNumber === it.articleNumber);
-    return (p?.group || "").toLowerCase();
-  };
+  // Artikel einer Position: über productId, bei Positionen von vor 1.2.0 über
+  // die Artikelnummer. Dieselbe Zuordnung für Quittungen und Gutschriften.
+  const productOf = (it) =>
+    it.productId ? byId.get(it.productId) : (inventory || []).find((x) => x.articleNumber && x.articleNumber === it.articleNumber);
+  const groupOf = (it) => (productOf(it)?.group || "").toLowerCase();
+  const inGroup = (it) => !wantedGroup || (itemKind(it) === "product" && groupOf(it).includes(wantedGroup));
   const inRange = (r) => (!from || r.date >= from) && (!to || r.date <= to);
 
   let total = 0;
   let receiptCount = 0;
   let open = 0;
+  // Offener Betrag je Rechnung (mit Gruppe: nur deren Positionen).
+  const openById = new Map();
   const top = new Map();
   for (const r of (receipts || []).filter(inRange)) {
-    const items = (r.items || []).filter(
-      (it) => !wantedGroup || (itemKind(it) === "product" && groupOf(it).includes(wantedGroup))
-    );
+    const items = (r.items || []).filter(inGroup);
     if (items.length === 0) continue;
     receiptCount++;
     const sum = wantedGroup ? items.reduce((s, it) => s + itemLineTotal(it), 0) : Number(r.total) || 0;
     total += sum;
-    if (r.qrBillEnabled && !r.paid) open += sum;
+    if (r.qrBillEnabled && !r.paid) {
+      open += sum;
+      openById.set(r.id, sum);
+    }
     for (const it of items) {
       if (itemKind(it) !== "product") continue;
       // Name aus dem Inventar, nie aus dem Beschreibungsfeld: Das ist Freitext
       // und kann Namen oder Telefonnummern enthalten.
-      const p = it.productId ? byId.get(it.productId) : (inventory || []).find((x) => x.articleNumber && x.articleNumber === it.articleNumber);
+      const p = productOf(it);
       const articleNumber = p?.articleNumber || "";
       const key = p ? p.id : "(freie Position)";
       const entry = top.get(key) || { articleNumber, name: p ? p.name || "" : "(freie Position)", quantity: 0, revenue: 0 };
@@ -129,12 +135,40 @@ export function salesReport(receipts, inventory, { from, to, group = "" } = {}) 
       top.set(key, entry);
     }
   }
+  let credited = 0;
+  let creditNoteCount = 0;
+  const creditedById = new Map();
+  // Betrag einer Gutschrift (mit Gruppe: nur deren Positionen).
+  const creditAmount = (c, items) => (wantedGroup ? items.reduce((s, it) => s + itemLineTotal(it), 0) : Number(c.total) || 0);
+  for (const c of creditNotes || []) {
+    creditedById.set(c.receiptId, (creditedById.get(c.receiptId) || 0) + creditAmount(c, (c.items || []).filter(inGroup)));
+  }
+  for (const c of (creditNotes || []).filter(inRange)) {
+    const items = (c.items || []).filter(inGroup);
+    if (items.length === 0) continue;
+    creditNoteCount++;
+    credited += creditAmount(c, items);
+    for (const it of items) {
+      if (itemKind(it) !== "product") continue;
+      const p = productOf(it);
+      const entry = top.get(p ? p.id : "(freie Position)");
+      if (!entry) continue;
+      entry.quantity -= itemQuantity(it);
+      entry.revenue = round2(entry.revenue - itemLineTotal(it));
+    }
+  }
+  // Offen ist bei Rechnungen mit Gutschrift nur noch der Rest — mit Gruppe
+  // zählen auch hier nur die Positionen dieser Gruppe.
+  for (const [id, sum] of openById) open -= Math.min(sum, creditedById.get(id) || 0);
   return {
     from: from || null,
     to: to || null,
     group: group || null,
     receiptCount,
-    total: round2(total),
+    grossTotal: round2(total),
+    creditNoteCount,
+    creditNotes: round2(credited),
+    total: round2(total - credited),
     openInvoices: round2(open),
     topArticles: [...top.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 10),
   };

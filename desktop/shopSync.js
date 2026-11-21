@@ -14,7 +14,7 @@
 // App sichtbar. Unveränderte Feeds werden nicht erneut geschickt — ausser mit
 // «Jetzt abgleichen».
 
-import { mkdirSync, renameSync, writeFileSync, existsSync } from "node:fs";
+import { renameSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 export const RETRY_DELAYS_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];

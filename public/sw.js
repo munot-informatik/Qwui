@@ -9,7 +9,8 @@
 // v5: Version 1.3.0 — neue Seitenleiste, Belege, Verkauf per Scan.
 // v6: Version 1.3.1 — Aufwand für die Buchhaltung.
 // v7: Version 1.4.0 — Bestellungen aus dem Online-Shop.
-const CACHE_NAME = "quittungs-tool-v7";
+// v8: Offerten, Gutschriften und Lieferscheine.
+const CACHE_NAME = "quittungs-tool-v8";
 const ASSETS_TO_CACHE = ["./", "./index.html", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

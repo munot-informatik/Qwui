@@ -23,6 +23,8 @@ export const MOVEMENT_TYPE = {
   sale: "verkauf",
   reversal: "storno",
   correction: "inventurkorrektur",
+  // Ab 1.5.0: Rücknahme mit Gutschrift (siehe bookCreditNote).
+  creditReturn: "retoure",
 };
 
 export const MOVEMENT_TYPE_LABEL = {
@@ -30,6 +32,7 @@ export const MOVEMENT_TYPE_LABEL = {
   verkauf: "Verkauf",
   storno: "Storno",
   inventurkorrektur: "Inventurkorrektur",
+  retoure: "Retoure",
 };
 
 export const MOVEMENT_SOURCE = { app: "app", assistant: "assistent" };
@@ -277,6 +280,165 @@ export function rebookReceipt(state, oldReceipt, newReceipt, ctx) {
     movements: [...reversed.movements, ...booked.movements],
     warnings: [...reversed.warnings, ...booked.warnings],
   };
+}
+
+// ---- Gutschrift (Rücknahme) ----
+//
+// Bucht die zurückgenommenen Produkte einer Gutschrift (shared/documents.js).
+// Je Position entscheidet restock:
+// - Exemplar mit Seriennummer: zurück «an Lager» oder (defekt, geht an den
+//   Lieferanten) «retourniert». Beides ist physisch zurück, deshalb immer +1
+//   — wie bei der Retoure von Hand (changeUnitStatus). Der Bezug zur Quittung
+//   wandert nach returnedFrom, damit ein Storno der Quittung nicht noch
+//   einmal zurückbucht.
+// - Menge ohne Seriennummer: mit restock zurück in den Bestand, sonst keine
+//   Bewegung (die Ware kommt nicht ins Lager).
+export function bookCreditNote({ inventory, units }, creditNote, ctx) {
+  const errors = [];
+  const movements = [];
+  const booking = [];
+  let nextInventory = [...(inventory || [])];
+  let nextUnits = [...(units || [])];
+  const note = `Gutschrift ${creditNote.number}`;
+  const ref = {
+    receiptId: creditNote.receiptId,
+    receiptNumber: creditNote.receiptNumber ?? null,
+    creditNoteId: creditNote.id,
+    creditNoteNumber: creditNote.number,
+    note,
+  };
+
+  for (const item of creditNote.items || []) {
+    if (item?.kind !== "product" || !item.productId) continue;
+    const product = nextInventory.find((p) => p.id === item.productId);
+
+    if (item.unitId) {
+      const unit = nextUnits.find((u) => u.id === item.unitId);
+      // Schon von Hand als Retoure erfasst (Exemplar-Status): Die Ware ist
+      // gebucht, die Gutschrift regelt nur noch das Geld.
+      if (unit && unit.returnedFrom?.receiptId === creditNote.receiptId && !unit.returnedFrom.creditNoteId) {
+        continue;
+      }
+      if (!unit || unit.receiptId !== creditNote.receiptId || unit.status !== UNIT_STATUS.sold) {
+        errors.push(`Seriennummer ${item.serial || "?"} gehört nicht mehr zu dieser Quittung (schon zurückgenommen?).`);
+        continue;
+      }
+      const status = item.restock ? UNIT_STATUS.inStock : UNIT_STATUS.returned;
+      nextUnits = nextUnits.map((u) =>
+        u.id === unit.id
+          ? {
+              ...u,
+              status,
+              returnedFrom: {
+                receiptId: unit.receiptId,
+                receiptNumber: unit.receiptNumber,
+                customerId: unit.customerId,
+                soldAt: unit.soldAt || null,
+                at: ctx.now,
+                creditNoteId: creditNote.id,
+                creditNoteNumber: creditNote.number,
+              },
+              receiptId: null,
+              receiptNumber: null,
+              customerId: null,
+              soldAt: null,
+            }
+          : u
+      );
+      booking.push({ productId: item.productId, unitId: unit.id, serial: unit.serial, qty: 1, status });
+      movements.push(
+        movement(ctx, {
+          productId: item.productId,
+          articleNumber: product?.articleNumber || item.articleNumber || "",
+          serial: unit.serial,
+          qty: 1,
+          type: MOVEMENT_TYPE.creditReturn,
+          ref,
+        })
+      );
+      continue;
+    }
+
+    if (!item.restock) continue;
+    if (!product) {
+      errors.push(`«${item.description || "Artikel"}» ist nicht mehr im Inventar — bitte ohne «zurück ins Lager» gutschreiben.`);
+      continue;
+    }
+    if (isSerialTracked(product)) {
+      errors.push(`«${product.name}» ist inzwischen seriennummernpflichtig — bitte ohne «zurück ins Lager» gutschreiben und das Exemplar im Wareneingang erfassen.`);
+      continue;
+    }
+    const qty = itemQuantity(item);
+    nextInventory = nextInventory.map((p) => (p.id === product.id ? { ...p, stock: (Number(p.stock) || 0) + qty } : p));
+    booking.push({ productId: product.id, qty });
+    movements.push(movement(ctx, { ...productMovementFields(product), qty, type: MOVEMENT_TYPE.creditReturn, ref }));
+  }
+
+  if (errors.length) return { inventory, units, creditNote, movements: [], errors };
+  return {
+    inventory: syncSerialStock(nextInventory, nextUnits),
+    units: nextUnits,
+    creditNote: { ...creditNote, stockBooking: booking },
+    movements,
+    errors,
+  };
+}
+
+// Löschen einer Gutschrift: die Rücknahme umkehren. Ein Exemplar geht nur
+// dann zurück an die Quittung, wenn es noch so dasteht, wie die Gutschrift es
+// hinterlassen hat — ist es inzwischen weiterverkauft, bleibt die Gutschrift.
+export function reverseCreditNote({ inventory, units }, creditNote, ctx) {
+  const errors = [];
+  const movements = [];
+  let nextInventory = [...(inventory || [])];
+  let nextUnits = [...(units || [])];
+  const ref = {
+    receiptId: creditNote.receiptId,
+    receiptNumber: creditNote.receiptNumber ?? null,
+    creditNoteId: creditNote.id,
+    creditNoteNumber: creditNote.number,
+    stornoOf: creditNote.id,
+    note: `Storno Gutschrift ${creditNote.number}`,
+  };
+
+  for (const line of creditNote.stockBooking || []) {
+    const product = nextInventory.find((p) => p.id === line.productId);
+    const fields = product ? productMovementFields(product) : { productId: line.productId, articleNumber: "" };
+    if (line.unitId) {
+      const unit = nextUnits.find((u) => u.id === line.unitId);
+      const untouched =
+        unit &&
+        unit.returnedFrom?.creditNoteId === creditNote.id &&
+        (unit.status === UNIT_STATUS.inStock || unit.status === UNIT_STATUS.returned || unit.status === UNIT_STATUS.reserved);
+      if (!untouched) {
+        errors.push(`Seriennummer ${line.serial || "?"} ist inzwischen weiterverkauft oder verändert — die Gutschrift lässt sich nicht mehr löschen.`);
+        continue;
+      }
+      const { returnedFrom, ...rest } = unit;
+      nextUnits = nextUnits.map((u) =>
+        u.id === unit.id
+          ? {
+              ...rest,
+              status: UNIT_STATUS.sold,
+              receiptId: returnedFrom.receiptId,
+              receiptNumber: returnedFrom.receiptNumber,
+              customerId: returnedFrom.customerId,
+              soldAt: returnedFrom.soldAt || returnedFrom.at,
+            }
+          : u
+      );
+      movements.push(movement(ctx, { ...fields, serial: line.serial || null, qty: -1, type: MOVEMENT_TYPE.reversal, ref }));
+      continue;
+    }
+    const qty = Number(line.qty) || 0;
+    if (product && !isSerialTracked(product)) {
+      nextInventory = nextInventory.map((p) => (p.id === product.id ? { ...p, stock: (Number(p.stock) || 0) - qty } : p));
+    }
+    movements.push(movement(ctx, { ...fields, qty: -qty, type: MOVEMENT_TYPE.reversal, ref }));
+  }
+
+  if (errors.length) return { inventory, units, movements: [], errors };
+  return { inventory: syncSerialStock(nextInventory, nextUnits), units: nextUnits, movements, errors };
 }
 
 // ---- Wareneingang ----

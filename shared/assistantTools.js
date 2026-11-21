@@ -51,8 +51,8 @@ export async function runAssistantTool(name, args, deps) {
       for (const key of ["von", "bis"]) {
         if (a[key] && !ISO_DATE.test(a[key])) throw new Error(`«${key}» bitte als JJJJ-MM-TT angeben.`);
       }
-      const { inventory, receipts } = await deps.readData();
-      return salesReport(receipts, inventory, { from: a.von, to: a.bis, group: a.gruppe || "" });
+      const { inventory, receipts, creditNotes } = await deps.readData();
+      return salesReport(receipts, inventory, { from: a.von, to: a.bis, group: a.gruppe || "" }, creditNotes || []);
     }
     case "ladenhueter": {
       const days = a.tage == null ? 90 : Number(a.tage);

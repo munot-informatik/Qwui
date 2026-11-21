@@ -17,6 +17,9 @@ import { createAutoBackup, backupFileName, KEEP } from "../desktop/autoBackup.js
 import { createShopSync } from "../desktop/shopSync.js";
 import { buildReceiptPdfBytes } from "../src/receiptPdf.js";
 import { pdfText } from "./helpers/pdfText.js";
+
+// Name, wie ihn storeLogo() vergibt: Inhalts-Hash plus Endung.
+const LOGO_REF = `${"a".repeat(64)}.png`;
 import { makeReceipt } from "./helpers/fixtures.js";
 
 function ctx() {
@@ -204,9 +207,9 @@ describe("Logos", () => {
   it("behält unter Windows die Referenz, wenn die Logo-Datei fehlt", async () => {
     const dir = mkdtempSync(join(tmpdir(), "qwui-logo-"));
     const store = openStore(join(dir, "qwui.db"), { storeLogo: async () => null, loadLogo: async () => "" });
-    await store.set("receipts-list", JSON.stringify([{ id: "r1", company: { logoRef: "abc.png", logoMime: "image/png" } }]));
+    await store.set("receipts-list", JSON.stringify([{ id: "r1", company: { logoRef: LOGO_REF, logoMime: "image/png" } }]));
     const read = JSON.parse((await store.get("receipts-list")).value);
-    expect(read[0].company.logoRef).toBe("abc.png");
+    expect(read[0].company.logoRef).toBe(LOGO_REF);
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });

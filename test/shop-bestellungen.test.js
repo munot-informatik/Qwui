@@ -206,6 +206,38 @@ describe("Bestellungen abholen", () => {
     expect(orders[0].qwuiStatus).toBe("verworfen");
   });
 
+  it("legt keinen zweiten Vorschlag an, solange die Entscheidung noch nicht beim Shop ist", async () => {
+    const orders = [structuredClone(order)];
+    const { imp, shop, state } = setup(orders);
+    await imp.poll();
+    // Gebucht, die Meldung scheitert am Shop (Serverfehler), und der erledigte
+    // Vorschlag fällt danach aus der Liste (nur 200 erledigte bleiben).
+    const real = shop.fetch;
+    const flaky = async (url, options = {}) =>
+      options.method === "POST" ? { ok: false, status: 503 } : real(url, options);
+    const imp2 = createOrderImport({
+      getConfig: () => ({ webhookEnabled: true, webhookUrl: "https://shop.example.ch/api/qwui/feed", ordersEnabled: true }),
+      getToken: () => "geheim-geheim-geheim",
+      readDrafts: () => state.drafts,
+      addDrafts: async (list) => state.drafts.push(...list),
+      readQueue: () => state.queue,
+      writeQueue: (q) => (state.queue = q),
+      readStatus: () => state.status,
+      writeStatus: (s) => (state.status = s),
+      fetch: flaky,
+      newId: () => `d${++n}`,
+    });
+    await imp2.report(order.id, "gebucht", "2027-02-13T10:06:00.000Z");
+    state.drafts = [];
+    await imp2.poll();
+    expect(state.drafts).toHaveLength(0);
+    expect(state.queue).toEqual([{ orderId: order.id, status: "gebucht", bookedAt: "2027-02-13T10:06:00.000Z" }]);
+    // Sobald der Shop wieder antwortet, kommt die Meldung an.
+    await imp.poll();
+    expect(orders[0].qwuiStatus).toBe("gebucht");
+    expect(state.drafts).toHaveLength(0);
+  });
+
   it("überspringt eine fehlerhafte Bestellung und holt die übrigen trotzdem ab", async () => {
     const bad = { ...structuredClone(order), id: "8f0c2a4e-0000-4000-8000-000000000002", number: 13, items: [] };
     const good = { ...structuredClone(order), id: "8f0c2a4e-0000-4000-8000-000000000003", number: 14 };

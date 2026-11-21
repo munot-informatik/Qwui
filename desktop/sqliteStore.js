@@ -33,6 +33,20 @@ const SCOPE_PREFIX = "personal:";
 // und tauchen deshalb in list() nie auf.
 const META_PREFIX = "meta:";
 
+// So heisst ein Logo, das storeLogo() abgelegt hat: Inhalts-Hash plus Endung.
+// Alles andere (z. B. «..\..\geheim.bin» aus einer untergeschobenen
+// Sicherung) wird nie als Datei gelesen.
+const LOGO_REF_RE = /^[0-9a-f]{64}\.(png|jpg)$/;
+const LOGO_MIMES = new Set(["image/png", "image/jpeg"]);
+
+export function isStoredLogoRef(ref) {
+  return typeof ref === "string" && LOGO_REF_RE.test(ref);
+}
+
+export function logoMimeOf(mime) {
+  return LOGO_MIMES.has(mime) ? mime : "image/png";
+}
+
 function escapeLike(value) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
@@ -109,6 +123,12 @@ export function openStore(dbPath, { storeLogo, loadLogo } = {}) {
     const restored = [];
     for (const receipt of receipts) {
       if (receipt?.company?.logoRef) {
+        if (!isStoredLogoRef(receipt.company.logoRef)) {
+          // Keine von Qwui abgelegte Logo-Datei: ohne Logo anzeigen.
+          const { logoRef, logoMime, ...company } = receipt.company;
+          restored.push({ ...receipt, company: { ...company, logoDataUrl: "" } });
+          continue;
+        }
         const logoDataUrl = await loadLogo(receipt.company.logoRef, receipt.company.logoMime);
         // Datei nicht lesbar: Referenz behalten, sonst entfernt das nächste
         // Speichern das Logo endgültig von dieser Quittung.

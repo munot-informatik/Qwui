@@ -70,7 +70,9 @@ export default function ShopAnbindung() {
     setBusy(true);
     setMessage(null);
     try {
-      apply(await api.syncNow());
+      // Nur den Status nachführen: Noch nicht gespeicherte Eingaben im
+      // Formular sollen stehen bleiben.
+      setState(await api.syncNow());
     } catch (e) {
       setMessage({ kind: "error", text: e.message || String(e) });
     }

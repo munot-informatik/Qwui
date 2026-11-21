@@ -45,6 +45,7 @@
       "autoBackup.js",
       "shopSync.js",
       "shopOrders.js",
+      "updater.js",
       "localApi.js",
       "excelExport.js",
       "ocr.js",

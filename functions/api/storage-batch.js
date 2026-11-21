@@ -29,6 +29,16 @@ function json(body, status = 200) {
   });
 }
 
+// Schreibende Aufrufe nur mit JSON-Körper. Ein Formular einer fremden Seite
+// kann nur text/plain, urlencoded oder multipart schicken; fetch() mit
+// application/json von fremder Herkunft braucht eine CORS-Vorabfrage, die
+// hier nie erlaubt wird. Zweite Sperre neben der Herkunftsprüfung in
+// functions/_middleware.js.
+export function requireJson(request) {
+  const type = String(request.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+  return type === "application/json" ? null : json({ error: "Content-Type muss application/json sein" }, 415);
+}
+
 export function newVersion() {
   return `${new Date().toISOString()}#${crypto.randomUUID().slice(0, 8)}`;
 }
@@ -92,6 +102,8 @@ export async function writeResponse(db, entries) {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  const notJson = requireJson(request);
+  if (notJson) return notJson;
   let body;
   try {
     body = await request.json();

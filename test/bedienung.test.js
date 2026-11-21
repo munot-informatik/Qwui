@@ -109,7 +109,7 @@ describe("Belege suchen", () => {
 
 describe("Kunden suchen", () => {
   const customers = [
-    { id: "a", name: "Marco Rossi", email: "marco@example.ch", phone: "+41 79 123 45 67", city: "Schaffhausen" },
+    { id: "a", name: "Marco Rossi", email: "marco@example.ch", phone: "+41 79 123 45 67", postalCode: "8200", city: "Schaffhausen" },
     { id: "b", name: "Andrea Marconi", email: "a@example.ch" },
     { id: "c", name: "Sandra Meier", email: "s@example.ch" },
   ];
@@ -121,6 +121,10 @@ describe("Kunden suchen", () => {
   it("findet über Telefon und Ort", () => {
     expect(searchCustomers(customers, "079 123").map((c) => c.id)).toEqual(["a"]);
     expect(searchCustomers(customers, "schaff").map((c) => c.id)).toEqual(["a"]);
+  });
+
+  it("findet über die Postleitzahl", () => {
+    expect(searchCustomers(customers, "8200").map((c) => c.id)).toEqual(["a"]);
   });
 
   it("zeigt ohne Suchtext alle alphabetisch, begrenzt", () => {

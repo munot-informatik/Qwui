@@ -122,16 +122,17 @@ export default function QrBillDocument({ receipt }) {
           </div>
 
           <div style={styles.fieldBlock}>
-            <div style={styles.label}>Zahlbar durch</div>
-            {receipt.customer?.name ? (
+            {/* Wie im QR-Code: Schuldner nur mit Name, PLZ und Ort, sonst ein leeres Feld zum Ausfüllen. */}
+            <div style={styles.label}>{debtor ? "Zahlbar durch" : "Zahlbar durch (Name/Adresse)"}</div>
+            {debtor ? (
               <>
-                <div style={styles.value}>{receipt.customer.name}</div>
+                <div style={styles.value}>{debtor.name}</div>
                 {debtorAddressLines.map((l, i) => (
                   <div style={styles.value} key={i}>{l}</div>
                 ))}
               </>
             ) : (
-              <div style={{ ...styles.value, color: "#B4B7BC" }}>&nbsp;</div>
+              <CornerBox width="52mm" height="20mm" />
             )}
           </div>
         </div>
@@ -204,20 +205,34 @@ export default function QrBillDocument({ receipt }) {
           </div>
 
           <div style={styles.fieldBlock}>
-            <div style={styles.label}>Zahlbar durch</div>
-            {receipt.customer?.name ? (
+            {/* Wie im QR-Code: Schuldner nur mit Name, PLZ und Ort, sonst ein leeres Feld zum Ausfüllen. */}
+            <div style={styles.label}>{debtor ? "Zahlbar durch" : "Zahlbar durch (Name/Adresse)"}</div>
+            {debtor ? (
               <>
-                <div style={styles.value}>{receipt.customer.name}</div>
+                <div style={styles.value}>{debtor.name}</div>
                 {debtorAddressLines.map((l, i) => (
                   <div style={styles.value} key={i}>{l}</div>
                 ))}
               </>
             ) : (
-              <div style={{ ...styles.value, color: "#B4B7BC" }}>&nbsp;</div>
+              <CornerBox width="65mm" height="25mm" />
             )}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Leeres Feld mit Eckmarken, wie es die Vorgaben für den Zahlteil verlangen.
+function CornerBox({ width, height }) {
+  const mark = { position: "absolute", width: "3mm", height: "3mm", borderColor: "#000", borderStyle: "solid", borderWidth: 0 };
+  return (
+    <div style={{ position: "relative", width, height, marginTop: 2 }} aria-label="Feld für Name und Adresse">
+      <span style={{ ...mark, left: 0, top: 0, borderLeftWidth: 1, borderTopWidth: 1 }} />
+      <span style={{ ...mark, right: 0, top: 0, borderRightWidth: 1, borderTopWidth: 1 }} />
+      <span style={{ ...mark, left: 0, bottom: 0, borderLeftWidth: 1, borderBottomWidth: 1 }} />
+      <span style={{ ...mark, right: 0, bottom: 0, borderRightWidth: 1, borderBottomWidth: 1 }} />
     </div>
   );
 }

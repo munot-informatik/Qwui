@@ -59,6 +59,15 @@ export function decryptBackup(fileText, password) {
     throw new Error("Die Datei ist keine verschlüsselte Qwui-Sicherung.");
   }
   const { N, r, p, salt } = envelope.kdf || {};
+  // Die Werte stammen aus der Datei. Ohne Obergrenze könnte eine präparierte
+  // Datei Qwui beim Öffnen minutenlang rechnen lassen oder den Speicher füllen.
+  // scrypt braucht 128 · N · r Bytes: Qwui selbst nimmt 32 MB, zugelassen sind
+  // höchstens 256 MB (Luft für stärkere Werte in einer späteren Version).
+  const reasonable = (v, max) => Number.isInteger(v) && v >= 1 && v <= max;
+  const powerOfTwo = reasonable(N, 2 ** 17) && N > 1 && (N & (N - 1)) === 0;
+  if (!powerOfTwo || !reasonable(r, 16) || !reasonable(p, 4) || N * r > 2 ** 21) {
+    throw new Error("Die Datei ist keine gültige Qwui-Sicherung.");
+  }
   try {
     const key = deriveKey(password, Buffer.from(salt, "base64"), { N, r, p });
     const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.iv, "base64"));
